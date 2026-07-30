@@ -1,229 +1,225 @@
-/**
- * T17-F: the guarded sacrificial v2 live-acceptance harness.
- *
- * BUILT, NOT EXECUTED by T17. It refuses to do anything unless ALL FOUR
- * preconditions hold, and it drives the real v2 flow only:
- *
- *   assistant turn -> OperationPreparationService (zero mutations)
- *     -> the STORED confirmation nonce through ConfirmationService (the
- *        button-equivalent path) -> receipt
- *
- * It never uses `executeTrustedDirectSafeWrite` — the trusted immediate-write
- * bypass exists for direct UI origins and must never stand in for a confirmed
- * assistant write in acceptance evidence.
- *
- * Every resource it creates is prefixed and recorded in an explicit registry,
- * and cleanup runs in reverse dependency order so a child is always removed
- * before its parent. Reports are secret-free and always carry leftover counts.
- */
-
-/** Every live resource this harness may create carries this prefix. */
-export const LIVE_V2_PREFIX = "AIASSIST_V2_";
-
-/** The four preconditions. All must hold; a missing one is a refusal, not a warning. */
-export interface LivePreconditionInput {
-  liveOptIn: string | undefined;
-  sacrificialMarker: string | undefined;
-  apiKey: string | undefined;
-  workspaceId: string | undefined;
-  cleanupRegistryPath: string | undefined;
-}
-
-export type LivePreconditionFailure =
-  | "live_opt_in_missing"
-  | "sacrificial_marker_missing"
-  | "credentials_missing"
-  | "workspace_missing"
-  | "cleanup_registry_missing";
-
-export type LivePreconditionResult =
-  | { ok: true; workspaceId: string; cleanupRegistryPath: string }
-  | { ok: false; failures: LivePreconditionFailure[] };
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  buildLiveV2Report,
+  decideLiveV2Execution,
+  LIVE_V2_WRITE_AUTHORIZATION_VALUE,
+  LIVE_V2_WRITE_AUTHORIZATION_VARIABLE,
+  PersistedCleanupRegistry,
+  reportContainsSecret,
+  type LiveV2Report,
+} from "./lib/live-v2-contract.js";
+import {
+  buildReportFromChainOutcome,
+  runLiveV2DryRun,
+  runV2WriteChain,
+  type ChainOutcome,
+} from "./lib/live-v2-chain.js";
 
 /**
- * The sacrificial marker must be the literal opt-in string. A workspace id alone
- * is NOT proof a workspace is disposable, which is exactly the mistake this
- * guard exists to prevent.
+ * B3 (`npm run live:v2-full`): the guarded sacrificial v2 live-write driver.
+ *
+ * It drives the REAL v2 flow only — the exact chain in both modes:
+ *
+ *   assistant turn (real v2 runner) -> OperationPreparationService with ZERO
+ *     external mutations pre-confirm -> the STORED confirmation nonce through
+ *     ConfirmationService (POST /api/confirmations/:id/confirm, the
+ *     button-equivalent path) -> truthful receipt -> a rejected same-nonce
+ *     replay probe (the one-use proof; probed ONLY after a real commit, since
+ *     a pre-commit denial never burns the nonce — after a denial the probe
+ *     cancels the still-armed preview instead of re-posting it) ->
+ *     reverse-dependency-order cleanup.
+ *
+ * It never uses the trusted immediate-write bypass — that path exists for
+ * direct UI origins and must never stand in for a confirmed assistant write in
+ * acceptance evidence (pinned by a source-scan unit test).
+ *
+ * MODES
+ *   --dry-run   Prove the chain against the FAKE Clockify host: no credentials,
+ *               no preconditions, a fetch guard blocks all network. Exit 0 only
+ *               on an honest `passed` report.
+ *   (default)   LIVE mode. Refuses without ALL FIVE preconditions, and even
+ *               with them performs no write without the separate per-step
+ *               authorization variable below.
+ *
+ * THE FIVE PRECONDITIONS (all required; a missing one is a refusal):
+ *   1. LIVE_CLOCKIFY=1                          — the live opt-in.
+ *   2. LIVE_SACRIFICIAL_WORKSPACE_MARKER        — the literal
+ *      "clockify-live-smoke-sacrificial"; a workspace id alone is never proof
+ *      a workspace is disposable.
+ *   3. LIVE_CLOCKIFY_API_KEY                    — sacrificial-workspace key.
+ *   4. LIVE_WORKSPACE_ID                        — the sacrificial workspace.
+ *   5. LIVE_V2_CLEANUP_REGISTRY_PATH            — CONSUMED, not decorative:
+ *      every created entity is persisted there AS IT IS CREATED, so an
+ *      interrupted run stays cleanable in reverse dependency order
+ *      (`pendingCleanupFromFile`).
+ *
+ * THE SEPARATE PER-STEP LIVE-WRITE AUTHORIZATION (replaces the old prose-only
+ * "T18-H" step): LIVE_V2_WRITE_AUTHORIZATION=execute-sacrificial-v2-writes.
+ * Preconditions prove the TARGET is sacrificial; this variable is the
+ * operator's explicit instruction to execute writes in THIS invocation.
+ * Without it the driver reports `not_executed` and makes no Clockify call.
+ *
+ * REPORT STATUS (honest, never a fake pass) and EXIT CODES:
+ *   refused      exit 2 — a precondition is missing; nothing ran.
+ *   not_executed exit 3 — preconditions hold, authorization absent; nothing ran.
+ *   failed       exit 1 — the chain ran and any check failed (a leftover, a
+ *                pre-confirm mutation, an accepted nonce replay, an untracked
+ *                creation, an unconfirmed write, a dropped case, or ANY
+ *                case-level failure code).
+ *   passed       exit 0 — every planned write case present in the per-case
+ *                evidence and judged passed, every write previewed,
+ *                button-confirmed, receipted, nonce-proven one-use, and
+ *                cleaned to zero leftovers.
+ *
+ * Both modes exit on the SAME report construction
+ * (`buildReportFromChainOutcome`): the report carries every per-case verdict
+ * (bounded literals only — case id, action name, status, failure code), and
+ * its pass condition requires complete, all-passed per-case evidence whose
+ * aggregate counters agree (prepared == planned == cases, confirmed ==
+ * prepared, one rejected replay per confirmed write). Aggregate arithmetic
+ * alone can never produce a pass.
  */
-export const SACRIFICIAL_MARKER = "clockify-live-smoke-sacrificial";
 
-export function checkLivePreconditions(input: LivePreconditionInput): LivePreconditionResult {
-  const failures: LivePreconditionFailure[] = [];
-  if (input.liveOptIn !== "1") failures.push("live_opt_in_missing");
-  if (input.sacrificialMarker !== SACRIFICIAL_MARKER) failures.push("sacrificial_marker_missing");
-  if (!input.apiKey) failures.push("credentials_missing");
-  if (!input.workspaceId) failures.push("workspace_missing");
-  if (!input.cleanupRegistryPath) failures.push("cleanup_registry_missing");
-  if (failures.length > 0) return { ok: false, failures };
-  return {
-    ok: true,
-    workspaceId: input.workspaceId as string,
-    cleanupRegistryPath: input.cleanupRegistryPath as string,
-  };
-}
+export {
+  buildLiveV2Report,
+  checkLivePreconditions,
+  decideLiveV2Execution,
+  LiveCleanupRegistry,
+  LIVE_RESOURCE_ORDER,
+  LIVE_V2_PREFIX,
+  LIVE_V2_WRITE_AUTHORIZATION_VALUE,
+  LIVE_V2_WRITE_AUTHORIZATION_VARIABLE,
+  PersistedCleanupRegistry,
+  pendingCleanupFromFile,
+  readCleanupRegistryFile,
+  reportContainsSecret,
+  SACRIFICIAL_MARKER,
+} from "./lib/live-v2-contract.js";
+export type {
+  CleanupRegistryView,
+  LivePreconditionFailure,
+  LivePreconditionInput,
+  LivePreconditionResult,
+  LiveResource,
+  LiveResourceKind,
+  LiveV2CaseReport,
+  LiveV2ExecutionDecision,
+  LiveV2Report,
+  PersistedRegistryFile,
+  PersistedRegistryFileEntry,
+} from "./lib/live-v2-contract.js";
+export {
+  buildReportFromChainOutcome,
+  confirmPreparedCase,
+  defaultChainCases,
+  DRY_RUN_ADMIN_USER_ID,
+  DRY_RUN_WORKSPACE_ID,
+  runLiveV2DryRun,
+  runV2WriteChain,
+} from "./lib/live-v2-chain.js";
+export type {
+  ChainCaseEvidence,
+  ChainOutcome,
+  ChainWriteCase,
+  ConfirmProbeOutcome,
+} from "./lib/live-v2-chain.js";
 
-/** Resource kinds this harness may create, in DEPENDENCY order (parent first). */
-export const LIVE_RESOURCE_ORDER = ["client", "project", "task", "tag"] as const;
-export type LiveResourceKind = (typeof LIVE_RESOURCE_ORDER)[number];
-
-export interface LiveResource {
-  kind: LiveResourceKind;
-  id: string;
-  /** Prefixed name; a resource without the prefix can never enter the registry. */
-  name: string;
-  /** Parent id for a child resource (a task's project). */
-  parentId?: string;
-}
-
-export class LiveCleanupRegistry {
-  private readonly resources: LiveResource[] = [];
-
-  /** Record a created resource. A non-prefixed name is rejected: the harness may
-   * only ever own — and therefore only ever delete — its own fixtures. */
-  record(resource: LiveResource): void {
-    if (!resource.name.startsWith(LIVE_V2_PREFIX)) {
-      throw new Error(`live_resource_not_fixture_owned:${resource.kind}`);
-    }
-    if (!LIVE_RESOURCE_ORDER.includes(resource.kind)) {
-      throw new Error(`live_resource_unknown_kind:${resource.kind}`);
-    }
-    this.resources.push({ ...resource });
+function emitReport(report: LiveV2Report, outcome?: ChainOutcome): boolean {
+  // Belt and braces on top of the report's bounded shape: if a nonce somehow
+  // reached the serialized report, refuse to print it at all.
+  const secrets = outcome ? outcome.collectedNonces : [];
+  if (reportContainsSecret(report, secrets)) {
+    process.stderr.write("live_v2_report_withheld: a confirmation nonce reached the report.\n");
+    return false;
   }
-
-  /** Reverse dependency order: children before parents, insertion order reversed within a kind. */
-  cleanupOrder(): LiveResource[] {
-    const ranked = [...this.resources].map((resource, index) => ({
-      resource,
-      depth: LIVE_RESOURCE_ORDER.indexOf(resource.kind),
-      index,
-    }));
-    ranked.sort((left, right) => (right.depth - left.depth) || (right.index - left.index));
-    return ranked.map((entry) => entry.resource);
-  }
-
-  all(): LiveResource[] {
-    return [...this.resources];
-  }
-
-  size(): number {
-    return this.resources.length;
-  }
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  return true;
 }
 
-export interface LiveV2Report {
-  schemaVersion: 1;
-  kind: "v2_live_acceptance";
-  status: "passed" | "failed" | "refused";
-  /** Hashed/short workspace reference only — never the raw credential. */
-  workspaceIdSuffix?: string;
-  preconditionFailures: LivePreconditionFailure[];
-  /** Assistant writes that reached a preview. */
-  preparedWrites: number;
-  /** Previews confirmed through the stored nonce (the button-equivalent path). */
-  confirmedWrites: number;
-  /** Mutations observed during preparation. MUST be zero. */
-  preparationMutations: number;
-  /** Trusted-direct-safe-write calls. MUST be zero — the bypass is never acceptance evidence. */
-  trustedBypassCalls: number;
-  resourcesCreated: number;
-  resourcesRemoved: number;
-  /** Anything created and not removed. A passing report requires zero. */
-  leftovers: number;
-  leftoverKinds: string[];
+async function runDryRunMode(): Promise<number> {
+  const cleanupRegistryPath = process.env.LIVE_V2_CLEANUP_REGISTRY_PATH
+    ?? join(mkdtempSync(join(tmpdir(), "live-v2-dry-run-")), "registry.json");
+  process.stderr.write(`live_v2_dry_run: fake host only, cleanup registry at ${cleanupRegistryPath}\n`);
+  const { report, outcome } = await runLiveV2DryRun({ cleanupRegistryPath });
+  if (!emitReport(report, outcome)) return 1;
+  return report.status === "passed" ? 0 : 1;
 }
 
-/** Only a zero-leftover, zero-bypass, zero-preparation-mutation run passes. */
-export function buildLiveV2Report(input: {
-  workspaceId?: string;
-  preconditionFailures?: LivePreconditionFailure[];
-  preparedWrites?: number;
-  confirmedWrites?: number;
-  preparationMutations?: number;
-  trustedBypassCalls?: number;
-  registry?: LiveCleanupRegistry;
-  removedIds?: readonly string[];
-}): LiveV2Report {
-  const failures = input.preconditionFailures ?? [];
-  const registry = input.registry ?? new LiveCleanupRegistry();
-  const removed = new Set(input.removedIds ?? []);
-  const leftovers = registry.all().filter((resource) => !removed.has(resource.id));
-  const preparationMutations = input.preparationMutations ?? 0;
-  const trustedBypassCalls = input.trustedBypassCalls ?? 0;
-  const preparedWrites = input.preparedWrites ?? 0;
-  const confirmedWrites = input.confirmedWrites ?? 0;
-
-  const status: LiveV2Report["status"] = failures.length > 0
-    ? "refused"
-    : (leftovers.length === 0
-        && preparationMutations === 0
-        && trustedBypassCalls === 0
-        && preparedWrites > 0
-        && confirmedWrites > 0)
-      ? "passed"
-      : "failed";
-
-  return {
-    schemaVersion: 1,
-    kind: "v2_live_acceptance",
-    status,
-    // Never the raw workspace id and never the key: a bounded suffix is enough
-    // to correlate a run without publishing an identifier.
-    ...(input.workspaceId ? { workspaceIdSuffix: input.workspaceId.slice(-4) } : {}),
-    preconditionFailures: failures,
-    preparedWrites,
-    confirmedWrites,
-    preparationMutations,
-    trustedBypassCalls,
-    resourcesCreated: registry.size(),
-    resourcesRemoved: registry.size() - leftovers.length,
-    leftovers: leftovers.length,
-    leftoverKinds: [...new Set(leftovers.map((resource) => resource.kind))].sort(),
-  };
-}
-
-/** A report may never contain a credential-shaped value. */
-export function reportContainsSecret(report: LiveV2Report, secrets: readonly string[]): boolean {
-  const serialized = JSON.stringify(report);
-  return secrets.some((secret) => secret.length > 0 && serialized.includes(secret));
-}
-
-function main(): void {
-  const preconditions = checkLivePreconditions({
-    liveOptIn: process.env.LIVE_CLOCKIFY,
-    sacrificialMarker: process.env.LIVE_SACRIFICIAL_WORKSPACE_MARKER,
-    apiKey: process.env.LIVE_CLOCKIFY_API_KEY,
-    workspaceId: process.env.LIVE_WORKSPACE_ID,
-    cleanupRegistryPath: process.env.LIVE_V2_CLEANUP_REGISTRY_PATH,
-  });
-  if (!preconditions.ok) {
+async function runLiveMode(): Promise<number> {
+  const decision = decideLiveV2Execution(process.env as Record<string, string | undefined>);
+  if (decision.kind === "refused") {
     // Refusal is the correct outcome without full authorization. No Clockify
     // call is made, and the report says exactly what was missing.
-    process.stdout.write(`${JSON.stringify(
-      buildLiveV2Report({ preconditionFailures: preconditions.failures }),
-      null,
-      2,
-    )}\n`);
-    process.exitCode = 2;
-    return;
+    emitReport(buildLiveV2Report({ preconditionFailures: decision.failures }));
+    return 2;
   }
-  // The live driver itself requires separate per-step operator authorization
-  // (T18-H). T17 builds and unit-proves the guard, registry, ordering and report
-  // contract; it deliberately performs no live write.
-  process.stdout.write(`${JSON.stringify(
-    buildLiveV2Report({
-      workspaceId: preconditions.workspaceId,
-      preconditionFailures: ["cleanup_registry_missing"].filter(() => false) as LivePreconditionFailure[],
-    }),
-    null,
-    2,
-  )}\n`);
-  process.stderr.write(
-    "live_v2_full_not_executed: preconditions satisfied, but executing sacrificial live writes "
-    + "requires the separate T18-H authorization step.\n",
-  );
-  process.exitCode = 2;
+  if (decision.kind === "not_executed") {
+    emitReport(buildLiveV2Report({ workspaceId: decision.workspaceId, notExecuted: true }));
+    process.stderr.write(
+      "live_v2_full_not_executed: preconditions satisfied, but executing sacrificial live "
+      + `writes requires ${LIVE_V2_WRITE_AUTHORIZATION_VARIABLE}=${LIVE_V2_WRITE_AUTHORIZATION_VALUE} `
+      + "(the separate per-step live-write authorization).\n",
+    );
+    return 3;
+  }
+
+  // Full authorization: the SAME chain the dry run proved, with the real REST
+  // adapter injected. Composed lazily so no live module loads before this point.
+  const { createRestWorkspaceClient } = await import("../src/clockify/rest-workspace.js");
+  const baseUrl = (process.env.LIVE_BASE_URL ?? "https://api.clockify.me/api/v1").replace(/\/$/, "");
+  const adminUserId = await resolveLiveAdminUserId(baseUrl, decision.apiKey);
+  const clockify = createRestWorkspaceClient({
+    baseUrl,
+    workspaceId: decision.workspaceId,
+    auth: { apiKey: decision.apiKey },
+  });
+  const registry = new PersistedCleanupRegistry(decision.cleanupRegistryPath);
+  const outcome = await runV2WriteChain({
+    clockify,
+    registry,
+    workspaceId: decision.workspaceId,
+    adminUserId,
+  });
+  // The SAME construction the dry run exits on: per-case verdicts included,
+  // so a case-level failure or a dropped case fails the live run itself.
+  const report = buildReportFromChainOutcome({
+    mode: "live",
+    workspaceId: decision.workspaceId,
+    outcome,
+    registry,
+  });
+  if (!emitReport(report, outcome)) return 1;
+  return report.status === "passed" ? 0 : 1;
+}
+
+/** The API key's own member identity, needed because every write re-verifies
+ * the caller's CURRENT workspace role before dispatch. Read-only bookkeeping. */
+async function resolveLiveAdminUserId(baseUrl: string, apiKey: string): Promise<string> {
+  const res = await fetch(`${baseUrl}/user`, { headers: { "X-Api-Key": apiKey } });
+  if (!res.ok) throw new Error(`live_v2_user_lookup_failed:${res.status}`);
+  const body = await res.json() as { id?: string };
+  if (typeof body.id !== "string" || body.id.length === 0) {
+    throw new Error("live_v2_user_lookup_malformed");
+  }
+  return body.id;
+}
+
+async function main(): Promise<void> {
+  process.exitCode = process.argv.includes("--dry-run")
+    ? await runDryRunMode()
+    : await runLiveMode();
 }
 
 if (process.argv[1]?.endsWith("live-v2-full.ts")) {
-  main();
+  main().catch((error: unknown) => {
+    // Never a fake pass: an unexpected crash is a failed run, reported without
+    // payloads (an error message could carry resource names or ids).
+    process.stderr.write(
+      `live_v2_full_crashed: ${error instanceof Error ? error.constructor.name : "unknown"}\n`,
+    );
+    process.stdout.write(`${JSON.stringify(buildLiveV2Report({ preparedWrites: 0, confirmedWrites: 0 }), null, 2)}\n`);
+    process.exitCode = 1;
+  });
 }

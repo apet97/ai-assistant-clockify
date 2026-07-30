@@ -109,9 +109,13 @@ durable path (or preferring `live:v2-full`), not relaxing the gate.
   provider.
 - **A live-Clockify v2 WRITE proof.** No confirmed v2 write has been executed
   against real Clockify: `live:v2-full` is the harness for it and refuses
-  without its four preconditions plus the separate per-step live-write
-  authorization, and `live-full.ts` cannot substitute (above). Confirmed writes
-  are proven against the fake host by `npm run test:e2e:real`.
+  without its five preconditions (the fifth, `LIVE_V2_CLEANUP_REGISTRY_PATH`,
+  is consumed: created entities persist there as they are created, so an
+  interrupted run stays cleanable in reverse dependency order) plus the
+  separate per-step `LIVE_V2_WRITE_AUTHORIZATION` variable, and `live-full.ts`
+  cannot substitute (above). Its `--dry-run` mode proves the exact
+  preview→stored-nonce-confirm chain against the fake host with zero network.
+  Confirmed writes are proven against the fake host by `npm run test:e2e:real`.
 - **Soak declaration**, **independent security/recovery sign-off**, and
   **Marketplace portal review/upload**.
 
