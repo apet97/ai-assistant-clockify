@@ -39,6 +39,8 @@ export interface HarnessRun {
   loadedOperationNames: string[];
   /** Tool names the run actually requested. */
   requestedToolNames: string[];
+  /** Unique tool names the model called, from durable requested or denied events, in first-event order. */
+  modelCalledToolNames: string[];
   /** Write action names the run durably prepared, in event order. */
   preparedWriteActionNames: string[];
   /** Largest number of API tools offered to the model in a single completion. */
@@ -238,6 +240,8 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
 
     const loadedOperationNames: string[] = [];
     const requestedToolNames: string[] = [];
+    const modelCalledToolNames: string[] = [];
+    const modelCalledToolNameSet = new Set<string>();
     const preparedWriteActionNames: string[] = [];
     let after = 0;
     let hasMore = true;
@@ -251,6 +255,13 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
         }
         if (entry.event.eventType === "tool.requested") {
           requestedToolNames.push(entry.event.payload.actionName);
+        }
+        if (
+          (entry.event.eventType === "tool.requested" || entry.event.eventType === "tool.denied")
+          && !modelCalledToolNameSet.has(entry.event.payload.actionName)
+        ) {
+          modelCalledToolNameSet.add(entry.event.payload.actionName);
+          modelCalledToolNames.push(entry.event.payload.actionName);
         }
         if (entry.event.eventType === "operation.prepared") {
           const operation = store.getOperationRun(entry.event.payload.operationId);
@@ -266,6 +277,7 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
       outcome,
       loadedOperationNames,
       requestedToolNames,
+      modelCalledToolNames,
       preparedWriteActionNames,
       maxLoadedApiTools,
       terminalPhase: state?.phase ?? "unknown",

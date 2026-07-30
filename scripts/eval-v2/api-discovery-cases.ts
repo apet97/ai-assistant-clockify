@@ -5,12 +5,13 @@ import { buildEvalCases, type EvalCase } from "./case-model.js";
 /**
  * T17-A: the discovery cohort. One case per model-API operation, each carrying
  * the three request phrasings the evaluator repeats three times, plus the exact
- * destructive operations that must NEVER be loaded for that request.
+ * destructive operations that the model must NEVER call for that request.
  *
  * The destructive watch list is derived, not chosen: every `write` operation
  * whose reviewed HTTP method is `DELETE`, minus anything in the request's own
  * feature group (a delete inside the requested domain is a plausible neighbour;
- * one in an unrelated domain is a discovery failure).
+ * a model call to one in an unrelated domain is a discovery failure). Merely
+ * loading a watched operation is retained as non-gating evaluator telemetry.
  */
 
 export const DISCOVERY_REPEATS = 3;
@@ -28,7 +29,7 @@ export interface DiscoveryEvalCase {
   paraphraseRequest: string;
   /** Must load the operation in at least 2 of 3 repeats; absent when the name is too short to corrupt. */
   typoRequest?: string;
-  /** Must load NONE of these in any repeat. */
+  /** Must call NONE of these in any repeat. */
   unrelatedDestructiveOperations: string[];
 }
 

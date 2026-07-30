@@ -20,6 +20,17 @@ export interface EvalAttempt {
   passed: boolean;
   /** Present when `passed` is false: the exact machine-readable reason. */
   failureCode?: string;
+  /** Non-gating telemetry: unrelated destructive operations present in this attempt's loaded set. */
+  loadedUnrelatedDestructiveOperations?: string[];
+}
+
+export interface LoadedUnrelatedDestructiveTelemetry {
+  /** Attempts whose loaded set contained at least one watched destructive operation. */
+  attempts: number;
+  /** Total distinct watched destructive loads across attempts. */
+  loads: number;
+  /** Per-operation load counts, sorted by action name. */
+  operations: Array<{ actionName: string; loads: number }>;
 }
 
 export interface EvalCohortScore {
@@ -56,6 +67,8 @@ export interface EvalReport {
   failures: Array<Required<Pick<EvalAttempt, "caseId" | "cohort" | "repeat">> & { failureCode: string }>;
   /** Distinct case ids that received at least one attempt — the completeness proof. */
   scoredCaseIds: string[];
+  /** Present for evaluators that record loaded-destructive telemetry; never affects status. */
+  loadedUnrelatedDestructiveTelemetry?: LoadedUnrelatedDestructiveTelemetry;
   /** Present only for a non-passing missing-credential report. */
   blockedReason?: string;
 }
@@ -77,6 +90,34 @@ function cohortScores(attempts: readonly EvalAttempt[]): EvalCohortScore[] {
       failedCaseIds: [...entry.failed].sort(),
     }))
     .sort((left, right) => left.cohort.localeCompare(right.cohort));
+}
+
+function loadedUnrelatedDestructiveTelemetry(
+  attempts: readonly EvalAttempt[],
+): LoadedUnrelatedDestructiveTelemetry | undefined {
+  let recordsTelemetry = false;
+  let attemptCount = 0;
+  let loadCount = 0;
+  const byOperation = new Map<string, number>();
+  for (const attempt of attempts) {
+    const loaded = attempt.loadedUnrelatedDestructiveOperations;
+    if (loaded === undefined) continue;
+    recordsTelemetry = true;
+    const unique = [...new Set(loaded)];
+    if (unique.length > 0) attemptCount += 1;
+    loadCount += unique.length;
+    for (const actionName of unique) {
+      byOperation.set(actionName, (byOperation.get(actionName) ?? 0) + 1);
+    }
+  }
+  if (!recordsTelemetry) return undefined;
+  return {
+    attempts: attemptCount,
+    loads: loadCount,
+    operations: [...byOperation.entries()]
+      .map(([actionName, loads]) => ({ actionName, loads }))
+      .sort((left, right) => left.actionName.localeCompare(right.actionName)),
+  };
 }
 
 /**
@@ -105,6 +146,7 @@ export function buildEvalReport(input: {
       repeat: attempt.repeat,
       failureCode: attempt.failureCode ?? "unspecified_failure",
     }));
+  const loadedDestructiveTelemetry = loadedUnrelatedDestructiveTelemetry(input.attempts);
   return {
     schemaVersion: 1,
     kind: input.kind,
@@ -117,6 +159,9 @@ export function buildEvalReport(input: {
     cohorts: cohortScores(input.attempts),
     failures,
     scoredCaseIds: [...new Set(input.attempts.map((attempt) => attempt.caseId))].sort(),
+    ...(loadedDestructiveTelemetry
+      ? { loadedUnrelatedDestructiveTelemetry: loadedDestructiveTelemetry }
+      : {}),
   };
 }
 
