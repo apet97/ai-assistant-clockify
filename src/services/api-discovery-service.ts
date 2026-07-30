@@ -25,7 +25,19 @@ export type ApiDiscoveryDeps = Pick<
 
 /** Seed a fresh run's loaded tool set from the latest catalog-compatible prior
  * run in the same exact scope: most-recently-used tools first, then loaded but
- * unused ones, else the registry's initial set. */
+ * unused ones, else the registry's initial set.
+ *
+ * Readiness-plan A2 (defect D-1): only READ operations may cross the turn
+ * boundary. Reads are idempotent and re-caching them is the latency win; a
+ * WRITE seeded from a prior turn let the model skip discovery and reach a
+ * prepared `clockify_stop_timer` on a turn that asked for a time entry. Every
+ * write must be rediscovered against the current turn's own words — an
+ * unseeded write call is denied `tool_not_loaded` and that denial feeds the
+ * next model request in the same run, so the model searches and recovers
+ * in-turn. The predicate is `apiOperation?.access === "read"`, the exact
+ * classifier `partitionToolCalls` uses (`isReadAction`/`isWriteAction`,
+ * action-execution-service.ts), where unknown access grades as write — so the
+ * seed filter and the partitioner can never disagree about what a write is. */
 export function seedCacheFromPriorRun(
   registry: ActionRegistry,
   prior: RunState | undefined,
@@ -36,7 +48,9 @@ export function seedCacheFromPriorRun(
   }
   const used = [...prior.usedToolNames].reverse();
   const unused = prior.loadedToolNames.filter((name) => !prior.usedToolNames.includes(name));
-  const ordered = [...used, ...unused].filter((name, index, all) => all.indexOf(name) === index);
+  const ordered = [...used, ...unused]
+    .filter((name, index, all) => all.indexOf(name) === index)
+    .filter((name) => registry.get(name)?.apiOperation?.access === "read");
   return initialV2ToolSet(registry, ordered);
 }
 

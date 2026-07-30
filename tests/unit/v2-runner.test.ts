@@ -138,8 +138,8 @@ describe("validateCompletionToolCalls", () => {
 });
 
 describe("seedCacheFromPriorRun", () => {
-  it("reuses used tools in most-recent order when catalog hash matches", () => {
-    const prior: RunState = {
+  function priorRun(loadedToolNames: string[], usedToolNames: string[]): RunState {
+    return {
       version: 2,
       runId: "old",
       sessionId: "s",
@@ -152,8 +152,8 @@ describe("seedCacheFromPriorRun", () => {
       phase: "completed",
       registryId: "v2-api",
       catalogHash: MODEL_API_ACTION_CATALOG.hash(),
-      loadedToolNames: [DISCOVERY_META_TOOL_NAME, "clockify_projects_list", "clockify_clients_list"],
-      usedToolNames: ["clockify_clients_list", "clockify_projects_list"],
+      loadedToolNames,
+      usedToolNames,
       completedResults: [],
       pendingOperationIds: [],
       unfinishedOperations: [],
@@ -172,8 +172,32 @@ describe("seedCacheFromPriorRun", () => {
       createdAt: "t",
       updatedAt: "t",
     };
+  }
+
+  it("reuses used tools in most-recent order when catalog hash matches", () => {
+    const prior = priorRun(
+      [DISCOVERY_META_TOOL_NAME, "clockify_projects_list", "clockify_clients_list"],
+      ["clockify_clients_list", "clockify_projects_list"],
+    );
     const seeded = seedCacheFromPriorRun(MODEL_API_ACTION_CATALOG, prior, MODEL_API_ACTION_CATALOG.hash());
     expect(seeded.has("clockify_clients_list")).toBe(true);
+    expect(seeded.has(DISCOVERY_META_TOOL_NAME)).toBe(true);
+  });
+
+  it("seeds a prior run's reads but never its writes, even used ones (readiness A2 / defect D-1)", () => {
+    // The production incident: turn 1 loaded AND used `clockify_stop_timer`;
+    // the next turn's seed re-loaded it, the model skipped discovery, and a
+    // stale write reached preparation. A write must be rediscovered against
+    // the current turn's own words — reads stay cached (idempotent, the
+    // latency win).
+    const prior = priorRun(
+      [DISCOVERY_META_TOOL_NAME, "clockify_projects_list", "clockify_stop_timer", "clockify_projects_create"],
+      ["clockify_stop_timer", "clockify_projects_list"],
+    );
+    const seeded = seedCacheFromPriorRun(MODEL_API_ACTION_CATALOG, prior, MODEL_API_ACTION_CATALOG.hash());
+    expect(seeded.has("clockify_projects_list")).toBe(true);
+    expect(seeded.has("clockify_stop_timer")).toBe(false);
+    expect(seeded.has("clockify_projects_create")).toBe(false);
     expect(seeded.has(DISCOVERY_META_TOOL_NAME)).toBe(true);
   });
 

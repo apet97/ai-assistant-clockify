@@ -33,9 +33,14 @@ function baseScope(): RunScope {
   };
 }
 
-/** A prior run in the same scope, so the exact-scope cache seed loads the tool
- * under test. Without it every call is denied `tool_not_loaded` before it can
- * reach the read or preparation port. */
+/** A prior run in the same scope, mirroring the real store: the eligibility
+ * query (`findLatestEligibleRunForCache`) returns whole prior runs whose
+ * loaded/used lists may name ANY tool — it does not filter by kind. The REAL
+ * `seedCacheFromPriorRun` then runs on this fake's return value, and post-A2
+ * (defect D-1) it seeds only READ tools: a read under test is loaded before
+ * its first call, while a WRITE named here is deliberately dropped and must be
+ * loaded by the current run's own discovery call (`discoveryLoading` below),
+ * exactly as production requires. */
 function priorRunSeeding(toolName: string): RunState {
   return {
     version: 2,
@@ -180,6 +185,28 @@ function statefulDeps(
 
 const READ_CALL: ToolCall = { id: "call-1", name: "clockify_projects_list", arguments: {} };
 
+const DISCOVER_CALL: ToolCall = {
+  id: "find-1",
+  name: DISCOVERY_META_TOOL_NAME,
+  arguments: { query: "create a project" },
+};
+
+/** An in-run discovery result that loads the write under test. Post-A2 a write
+ * is never seeded across turns, so these tests load it the way production does
+ * — through the current run's own `assistant_find_api_operations` search. The
+ * descriptor mirrors the real index's ranked output (`toolName` is the only
+ * field `refineLoadedToolSet` reads). */
+function discoveryLoading(toolName: string): RunnerDependencies["discovery"] {
+  return {
+    search: vi.fn(async () => ({
+      kind: "matches" as const,
+      query: "x",
+      access: "any" as const,
+      operations: [{ toolName }],
+    })),
+  } as unknown as RunnerDependencies["discovery"];
+}
+
 describe("denial codes stay inside the event payload bound", () => {
   it("keeps a code built from a thrown exception message persistable", () => {
     // Surfacing the real cause is worthless if writing it down throws: the
@@ -242,29 +269,44 @@ describe("v2 tool-result feedback", () => {
 
   it("shows the model why a write was denied instead of silently repeating the request", async () => {
     const seen: ModelMessage[][] = [];
+    let call = 0;
     const completeWithTools = vi.fn(async (messages: ModelMessage[]) => {
       seen.push(structuredClone(messages));
+      call += 1;
+      // Post-A2 the write is not seeded from the prior run: the model loads it
+      // with an in-run discovery call first, then the denied preparation's
+      // code must reach the next request.
+      if (call === 1) return { text: "", toolCalls: [DISCOVER_CALL] };
       return {
         text: "",
         toolCalls: [{ id: "call-w", name: "clockify_projects_create", arguments: { name: "asdasdsa" } }],
       };
     });
 
-    const { deps } = statefulDeps(completeWithTools as never, "clockify_projects_create");
+    const { deps } = statefulDeps(completeWithTools as never, "clockify_projects_create", {
+      discovery: discoveryLoading("clockify_projects_create"),
+    });
 
     await runAssistantV2({ runId: "run-1", scope: baseScope(), originalRequest: "Create a project named asdasdsa" }, deps);
 
-    expect(seen.length).toBeGreaterThanOrEqual(2);
-    expect(JSON.stringify(seen[1])).toContain("policy_denied");
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    expect(JSON.stringify(seen[2])).toContain("policy_denied");
   });
 
   it("reports the real denial code, never a bogus budget_exhausted", async () => {
-    const completeWithTools = vi.fn(async () => ({
-      text: "",
-      toolCalls: [{ id: "call-w", name: "clockify_projects_create", arguments: { name: "asdasdsa" } }],
-    }));
+    let call = 0;
+    const completeWithTools = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return { text: "", toolCalls: [DISCOVER_CALL] };
+      return {
+        text: "",
+        toolCalls: [{ id: "call-w", name: "clockify_projects_create", arguments: { name: "asdasdsa" } }],
+      };
+    });
 
-    const { deps } = statefulDeps(completeWithTools as never, "clockify_projects_create");
+    const { deps } = statefulDeps(completeWithTools as never, "clockify_projects_create", {
+      discovery: discoveryLoading("clockify_projects_create"),
+    });
 
     const outcome = await runAssistantV2(
       { runId: "run-1", scope: baseScope(), originalRequest: "Create a project named asdasdsa" },
@@ -347,12 +389,19 @@ describe("v2 tool-result feedback", () => {
   });
 
   it("does not burn the whole model-call budget on a provably unchanged request", async () => {
-    const completeWithTools = vi.fn(async () => ({
-      text: "",
-      toolCalls: [{ id: "call-w", name: "clockify_projects_create", arguments: { name: "asdasdsa" } }],
-    }));
+    let call = 0;
+    const completeWithTools = vi.fn(async () => {
+      call += 1;
+      if (call === 1) return { text: "", toolCalls: [DISCOVER_CALL] };
+      return {
+        text: "",
+        toolCalls: [{ id: "call-w", name: "clockify_projects_create", arguments: { name: "asdasdsa" } }],
+      };
+    });
 
-    const { deps } = statefulDeps(completeWithTools as never, "clockify_projects_create");
+    const { deps } = statefulDeps(completeWithTools as never, "clockify_projects_create", {
+      discovery: discoveryLoading("clockify_projects_create"),
+    });
 
     await runAssistantV2(
       { runId: "run-1", scope: baseScope(), originalRequest: "Create a project named asdasdsa" },
