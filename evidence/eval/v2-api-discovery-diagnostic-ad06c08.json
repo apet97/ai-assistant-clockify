@@ -1,0 +1,6223 @@
+{
+  "schemaVersion": 1,
+  "kind": "v2_api_discovery",
+  "status": "failed",
+  "identity": {
+    "candidateSha": "ad06c083d3e1fc6194dd2fa7b1c6710cc190736e",
+    "catalogHash": "3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7",
+    "registryId": "v2-api",
+    "modelConfiguration": "provider=http model=deepseek-v4-pro",
+    "cohortOrder": [
+      "canonical",
+      "paraphrase",
+      "typo"
+    ]
+  },
+  "caseCount": 127,
+  "numerator": 239,
+  "denominator": 1143,
+  "cohorts": [
+    {
+      "cohort": "canonical",
+      "numerator": 86,
+      "denominator": 381,
+      "failedCaseIds": [
+        "clockify_approvals_approve",
+        "clockify_approvals_reject",
+        "clockify_approvals_resubmit",
+        "clockify_approvals_submit",
+        "clockify_approvals_withdraw",
+        "clockify_clients_archive",
+        "clockify_clients_create_base",
+        "clockify_clients_delete_archived",
+        "clockify_clients_get",
+        "clockify_clients_update",
+        "clockify_custom_fields_create",
+        "clockify_custom_fields_delete",
+        "clockify_custom_fields_set_value_entry",
+        "clockify_custom_fields_set_value_project",
+        "clockify_custom_fields_update",
+        "clockify_entity_changes_updated",
+        "clockify_entries_create",
+        "clockify_entries_delete",
+        "clockify_entries_get",
+        "clockify_entries_mark_invoiced",
+        "clockify_entries_start",
+        "clockify_entries_update",
+        "clockify_expenses_categories_create",
+        "clockify_expenses_categories_delete_archived",
+        "clockify_expenses_categories_rename",
+        "clockify_expenses_categories_status_update",
+        "clockify_expenses_create",
+        "clockify_expenses_delete",
+        "clockify_expenses_update",
+        "clockify_groups_add_member",
+        "clockify_groups_create",
+        "clockify_groups_delete",
+        "clockify_groups_remove_user",
+        "clockify_groups_update",
+        "clockify_holidays_create",
+        "clockify_holidays_delete",
+        "clockify_holidays_in_period",
+        "clockify_holidays_update",
+        "clockify_invoices_create_base",
+        "clockify_invoices_delete",
+        "clockify_invoices_export",
+        "clockify_invoices_fields_update",
+        "clockify_invoices_get",
+        "clockify_invoices_import_time",
+        "clockify_invoices_items_add",
+        "clockify_invoices_items_delete",
+        "clockify_invoices_payments_create",
+        "clockify_invoices_payments_delete",
+        "clockify_invoices_payments_list",
+        "clockify_invoices_status_update",
+        "clockify_projects_archive",
+        "clockify_projects_create",
+        "clockify_projects_delete_archived",
+        "clockify_projects_estimate_update",
+        "clockify_projects_from_template",
+        "clockify_projects_get",
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
+        "clockify_projects_memberships_replace",
+        "clockify_projects_update",
+        "clockify_scheduling_assignments_create",
+        "clockify_scheduling_assignments_delete",
+        "clockify_scheduling_assignments_list",
+        "clockify_scheduling_assignments_update",
+        "clockify_scheduling_project_totals_all",
+        "clockify_scheduling_project_totals_one",
+        "clockify_scheduling_publish",
+        "clockify_scheduling_user_totals",
+        "clockify_stop_timer",
+        "clockify_tags_create",
+        "clockify_tags_delete",
+        "clockify_tags_get",
+        "clockify_tags_update",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
+        "clockify_tasks_create",
+        "clockify_tasks_delete_completed",
+        "clockify_tasks_get",
+        "clockify_tasks_hourly_rate_update",
+        "clockify_tasks_list",
+        "clockify_tasks_status_update",
+        "clockify_tasks_update",
+        "clockify_templates_get",
+        "clockify_time_off_approve",
+        "clockify_time_off_balance_update",
+        "clockify_time_off_deny",
+        "clockify_time_off_policies_archive",
+        "clockify_time_off_policies_create",
+        "clockify_time_off_policies_get",
+        "clockify_time_off_policies_update",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours",
+        "clockify_time_off_requests_delete",
+        "clockify_users_cost_rate_update",
+        "clockify_users_deactivate",
+        "clockify_users_hourly_rate_update",
+        "clockify_users_invite",
+        "clockify_users_role_update",
+        "clockify_webhooks_create",
+        "clockify_webhooks_delete",
+        "clockify_webhooks_get",
+        "clockify_webhooks_list",
+        "clockify_webhooks_logs",
+        "clockify_webhooks_update"
+      ]
+    },
+    {
+      "cohort": "paraphrase",
+      "numerator": 67,
+      "denominator": 381,
+      "failedCaseIds": [
+        "clockify_approvals_approve",
+        "clockify_approvals_reject",
+        "clockify_approvals_resubmit",
+        "clockify_approvals_submit",
+        "clockify_approvals_withdraw",
+        "clockify_clients_archive",
+        "clockify_clients_create_base",
+        "clockify_clients_delete_archived",
+        "clockify_clients_get",
+        "clockify_clients_update",
+        "clockify_custom_fields_create",
+        "clockify_custom_fields_delete",
+        "clockify_custom_fields_set_value_entry",
+        "clockify_custom_fields_set_value_project",
+        "clockify_custom_fields_update",
+        "clockify_entity_changes_created",
+        "clockify_entries_create",
+        "clockify_entries_delete",
+        "clockify_entries_get",
+        "clockify_entries_list",
+        "clockify_entries_mark_invoiced",
+        "clockify_entries_start",
+        "clockify_entries_update",
+        "clockify_expenses_categories_create",
+        "clockify_expenses_categories_delete_archived",
+        "clockify_expenses_categories_rename",
+        "clockify_expenses_categories_status_update",
+        "clockify_expenses_create",
+        "clockify_expenses_delete",
+        "clockify_expenses_get",
+        "clockify_expenses_update",
+        "clockify_groups_add_member",
+        "clockify_groups_create",
+        "clockify_groups_delete",
+        "clockify_groups_remove_user",
+        "clockify_groups_update",
+        "clockify_holidays_create",
+        "clockify_holidays_delete",
+        "clockify_holidays_in_period",
+        "clockify_holidays_list",
+        "clockify_holidays_update",
+        "clockify_invoices_create_base",
+        "clockify_invoices_delete",
+        "clockify_invoices_export",
+        "clockify_invoices_fields_update",
+        "clockify_invoices_get",
+        "clockify_invoices_import_time",
+        "clockify_invoices_items_add",
+        "clockify_invoices_items_delete",
+        "clockify_invoices_payments_create",
+        "clockify_invoices_payments_delete",
+        "clockify_invoices_payments_list",
+        "clockify_invoices_status_update",
+        "clockify_projects_archive",
+        "clockify_projects_create",
+        "clockify_projects_delete_archived",
+        "clockify_projects_estimate_update",
+        "clockify_projects_from_template",
+        "clockify_projects_get",
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
+        "clockify_projects_memberships_replace",
+        "clockify_projects_update",
+        "clockify_scheduling_assignments_create",
+        "clockify_scheduling_assignments_delete",
+        "clockify_scheduling_assignments_list",
+        "clockify_scheduling_assignments_update",
+        "clockify_scheduling_project_totals_all",
+        "clockify_scheduling_project_totals_one",
+        "clockify_scheduling_publish",
+        "clockify_scheduling_user_totals",
+        "clockify_stop_timer",
+        "clockify_tags_create",
+        "clockify_tags_delete",
+        "clockify_tags_get",
+        "clockify_tags_update",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
+        "clockify_tasks_create",
+        "clockify_tasks_delete_completed",
+        "clockify_tasks_get",
+        "clockify_tasks_hourly_rate_update",
+        "clockify_tasks_list",
+        "clockify_tasks_status_update",
+        "clockify_tasks_update",
+        "clockify_templates_get",
+        "clockify_time_off_approve",
+        "clockify_time_off_balance_update",
+        "clockify_time_off_deny",
+        "clockify_time_off_policies_archive",
+        "clockify_time_off_policies_create",
+        "clockify_time_off_policies_get",
+        "clockify_time_off_policies_update",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours",
+        "clockify_time_off_requests_delete",
+        "clockify_users_cost_rate_update",
+        "clockify_users_deactivate",
+        "clockify_users_hourly_rate_update",
+        "clockify_users_invite",
+        "clockify_users_role_update",
+        "clockify_webhooks_create",
+        "clockify_webhooks_delete",
+        "clockify_webhooks_get",
+        "clockify_webhooks_list",
+        "clockify_webhooks_logs",
+        "clockify_webhooks_update"
+      ]
+    },
+    {
+      "cohort": "typo",
+      "numerator": 86,
+      "denominator": 381,
+      "failedCaseIds": [
+        "clockify_approvals_approve",
+        "clockify_approvals_reject",
+        "clockify_approvals_resubmit",
+        "clockify_approvals_submit",
+        "clockify_approvals_withdraw",
+        "clockify_clients_archive",
+        "clockify_clients_create_base",
+        "clockify_clients_delete_archived",
+        "clockify_clients_get",
+        "clockify_clients_update",
+        "clockify_custom_fields_create",
+        "clockify_custom_fields_delete",
+        "clockify_custom_fields_set_value_entry",
+        "clockify_custom_fields_set_value_project",
+        "clockify_custom_fields_update",
+        "clockify_entries_create",
+        "clockify_entries_delete",
+        "clockify_entries_get",
+        "clockify_entries_mark_invoiced",
+        "clockify_entries_start",
+        "clockify_entries_update",
+        "clockify_expenses_categories_create",
+        "clockify_expenses_categories_delete_archived",
+        "clockify_expenses_categories_rename",
+        "clockify_expenses_categories_status_update",
+        "clockify_expenses_create",
+        "clockify_expenses_delete",
+        "clockify_expenses_get",
+        "clockify_expenses_update",
+        "clockify_groups_add_member",
+        "clockify_groups_create",
+        "clockify_groups_delete",
+        "clockify_groups_remove_user",
+        "clockify_groups_update",
+        "clockify_holidays_create",
+        "clockify_holidays_delete",
+        "clockify_holidays_in_period",
+        "clockify_holidays_update",
+        "clockify_invoices_create_base",
+        "clockify_invoices_delete",
+        "clockify_invoices_fields_update",
+        "clockify_invoices_get",
+        "clockify_invoices_import_time",
+        "clockify_invoices_items_add",
+        "clockify_invoices_items_delete",
+        "clockify_invoices_payments_create",
+        "clockify_invoices_payments_delete",
+        "clockify_invoices_payments_list",
+        "clockify_invoices_status_update",
+        "clockify_projects_archive",
+        "clockify_projects_create",
+        "clockify_projects_delete_archived",
+        "clockify_projects_estimate_update",
+        "clockify_projects_from_template",
+        "clockify_projects_get",
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
+        "clockify_projects_memberships_replace",
+        "clockify_projects_update",
+        "clockify_scheduling_assignments_create",
+        "clockify_scheduling_assignments_delete",
+        "clockify_scheduling_assignments_list",
+        "clockify_scheduling_assignments_update",
+        "clockify_scheduling_project_totals_all",
+        "clockify_scheduling_project_totals_one",
+        "clockify_scheduling_publish",
+        "clockify_scheduling_user_totals",
+        "clockify_stop_timer",
+        "clockify_tags_create",
+        "clockify_tags_delete",
+        "clockify_tags_get",
+        "clockify_tags_update",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
+        "clockify_tasks_create",
+        "clockify_tasks_delete_completed",
+        "clockify_tasks_get",
+        "clockify_tasks_hourly_rate_update",
+        "clockify_tasks_status_update",
+        "clockify_tasks_update",
+        "clockify_templates_get",
+        "clockify_time_off_approve",
+        "clockify_time_off_balance_update",
+        "clockify_time_off_deny",
+        "clockify_time_off_policies_archive",
+        "clockify_time_off_policies_create",
+        "clockify_time_off_policies_update",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours",
+        "clockify_time_off_requests_delete",
+        "clockify_users_cost_rate_update",
+        "clockify_users_deactivate",
+        "clockify_users_hourly_rate_update",
+        "clockify_users_invite",
+        "clockify_users_role_update",
+        "clockify_webhooks_create",
+        "clockify_webhooks_delete",
+        "clockify_webhooks_get",
+        "clockify_webhooks_list",
+        "clockify_webhooks_logs",
+        "clockify_webhooks_update"
+      ]
+    }
+  ],
+  "failures": [
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entity_changes_updated",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_entity_changes_updated",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_export",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_list",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_list",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_list",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_all",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_list",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_list",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_get",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_custom_fields_delete"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_clients_delete_archived"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_clients_delete_archived"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_custom_fields_delete"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_custom_fields_delete"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_custom_fields_delete"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "canonical",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "canonical",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "canonical",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entity_changes_created",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_list",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_list",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_holidays_list",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_invoices_export",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_export",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_export",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_list",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_list",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_list",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_list",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_list",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_all",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_all",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_all",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_list",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_list",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_list",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_time_off_requests_delete"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_clients_delete_archived"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_clients_delete_archived"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_custom_fields_delete"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tags_delete"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "paraphrase",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "paraphrase",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "paraphrase",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_in_period",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_list",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_list",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_all",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_all",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_project_totals_one",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_user_totals",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_templates_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_get",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_list",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_logs",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_time_off_requests_delete"
+    },
+    {
+      "caseId": "clockify_approvals_approve",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_holidays_delete"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_reject",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_holidays_delete"
+    },
+    {
+      "caseId": "clockify_approvals_resubmit",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_submit",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_approvals_withdraw",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_archive",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_create_base",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_delete_archived",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_clients_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_entry",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_set_value_project",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_custom_fields_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_mark_invoiced",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_entries_delete"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_time_off_requests_delete"
+    },
+    {
+      "caseId": "clockify_entries_start",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_entries_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_delete_archived",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_rename",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_categories_status_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_expenses_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_add_member",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_remove_user",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_groups_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_holidays_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_create_base",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_fields_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_import_time",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_add",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_items_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_payments_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_invoices_status_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_archive",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_delete_archived",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_estimate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_from_template",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_projects_member_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_memberships_replace",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_projects_delete_archived"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_projects_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_assignments_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_scheduling_publish",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_stop_timer",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tags_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_assignees_replace",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_delete_completed",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_tasks_delete_completed"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_status_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_tasks_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_approve",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_balance_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_deny",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_archive",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_policies_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_days",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_create_hours",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_time_off_requests_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_cost_rate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_deactivate",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "unrelated_destructive_loaded:clockify_groups_delete"
+    },
+    {
+      "caseId": "clockify_users_hourly_rate_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_invite",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_users_role_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_loaded_but_not_used"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_create",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_delete",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "typo",
+      "repeat": 0,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "typo",
+      "repeat": 1,
+      "failureCode": "operation_not_loaded"
+    },
+    {
+      "caseId": "clockify_webhooks_update",
+      "cohort": "typo",
+      "repeat": 2,
+      "failureCode": "operation_not_loaded"
+    }
+  ],
+  "scoredCaseIds": [
+    "clockify_approvals_approve",
+    "clockify_approvals_list",
+    "clockify_approvals_reject",
+    "clockify_approvals_resubmit",
+    "clockify_approvals_submit",
+    "clockify_approvals_withdraw",
+    "clockify_clients_archive",
+    "clockify_clients_create_base",
+    "clockify_clients_delete_archived",
+    "clockify_clients_get",
+    "clockify_clients_list",
+    "clockify_clients_update",
+    "clockify_custom_fields_create",
+    "clockify_custom_fields_delete",
+    "clockify_custom_fields_list",
+    "clockify_custom_fields_set_value_entry",
+    "clockify_custom_fields_set_value_project",
+    "clockify_custom_fields_update",
+    "clockify_entity_changes_created",
+    "clockify_entity_changes_deleted",
+    "clockify_entity_changes_updated",
+    "clockify_entries_create",
+    "clockify_entries_delete",
+    "clockify_entries_get",
+    "clockify_entries_list",
+    "clockify_entries_mark_invoiced",
+    "clockify_entries_start",
+    "clockify_entries_update",
+    "clockify_expenses_categories_create",
+    "clockify_expenses_categories_delete_archived",
+    "clockify_expenses_categories_list",
+    "clockify_expenses_categories_rename",
+    "clockify_expenses_categories_status_update",
+    "clockify_expenses_create",
+    "clockify_expenses_delete",
+    "clockify_expenses_get",
+    "clockify_expenses_list",
+    "clockify_expenses_update",
+    "clockify_groups_add_member",
+    "clockify_groups_create",
+    "clockify_groups_delete",
+    "clockify_groups_list",
+    "clockify_groups_remove_user",
+    "clockify_groups_update",
+    "clockify_holidays_create",
+    "clockify_holidays_delete",
+    "clockify_holidays_in_period",
+    "clockify_holidays_list",
+    "clockify_holidays_update",
+    "clockify_invoices_create_base",
+    "clockify_invoices_delete",
+    "clockify_invoices_export",
+    "clockify_invoices_fields_update",
+    "clockify_invoices_get",
+    "clockify_invoices_import_time",
+    "clockify_invoices_items_add",
+    "clockify_invoices_items_delete",
+    "clockify_invoices_list",
+    "clockify_invoices_payments_create",
+    "clockify_invoices_payments_delete",
+    "clockify_invoices_payments_list",
+    "clockify_invoices_status_update",
+    "clockify_projects_archive",
+    "clockify_projects_create",
+    "clockify_projects_delete_archived",
+    "clockify_projects_estimate_update",
+    "clockify_projects_from_template",
+    "clockify_projects_get",
+    "clockify_projects_list",
+    "clockify_projects_member_cost_rate_update",
+    "clockify_projects_member_hourly_rate_update",
+    "clockify_projects_memberships_replace",
+    "clockify_projects_update",
+    "clockify_reports_detailed",
+    "clockify_reports_summary",
+    "clockify_reports_weekly",
+    "clockify_scheduling_assignments_create",
+    "clockify_scheduling_assignments_delete",
+    "clockify_scheduling_assignments_list",
+    "clockify_scheduling_assignments_update",
+    "clockify_scheduling_project_totals_all",
+    "clockify_scheduling_project_totals_one",
+    "clockify_scheduling_publish",
+    "clockify_scheduling_user_totals",
+    "clockify_stop_timer",
+    "clockify_tags_create",
+    "clockify_tags_delete",
+    "clockify_tags_get",
+    "clockify_tags_list",
+    "clockify_tags_update",
+    "clockify_tasks_assignees_replace",
+    "clockify_tasks_cost_rate_update",
+    "clockify_tasks_create",
+    "clockify_tasks_delete_completed",
+    "clockify_tasks_get",
+    "clockify_tasks_hourly_rate_update",
+    "clockify_tasks_list",
+    "clockify_tasks_status_update",
+    "clockify_tasks_update",
+    "clockify_templates_get",
+    "clockify_templates_list",
+    "clockify_time_off_approve",
+    "clockify_time_off_balance_get",
+    "clockify_time_off_balance_update",
+    "clockify_time_off_deny",
+    "clockify_time_off_policies_archive",
+    "clockify_time_off_policies_create",
+    "clockify_time_off_policies_get",
+    "clockify_time_off_policies_list",
+    "clockify_time_off_policies_update",
+    "clockify_time_off_requests_create_days",
+    "clockify_time_off_requests_create_hours",
+    "clockify_time_off_requests_delete",
+    "clockify_time_off_requests_list",
+    "clockify_users_cost_rate_update",
+    "clockify_users_deactivate",
+    "clockify_users_hourly_rate_update",
+    "clockify_users_invite",
+    "clockify_users_list",
+    "clockify_users_role_update",
+    "clockify_webhooks_create",
+    "clockify_webhooks_delete",
+    "clockify_webhooks_get",
+    "clockify_webhooks_list",
+    "clockify_webhooks_logs",
+    "clockify_webhooks_update",
+    "clockify_workspace_get"
+  ],
+  "thresholdViolations": [
+    "clockify_approvals_approve:canonical_below_3_of_3",
+    "clockify_approvals_approve:paraphrase_below_2_of_3",
+    "clockify_approvals_approve:typo_below_2_of_3",
+    "clockify_approvals_reject:canonical_below_3_of_3",
+    "clockify_approvals_reject:paraphrase_below_2_of_3",
+    "clockify_approvals_reject:typo_below_2_of_3",
+    "clockify_approvals_resubmit:canonical_below_3_of_3",
+    "clockify_approvals_resubmit:paraphrase_below_2_of_3",
+    "clockify_approvals_resubmit:typo_below_2_of_3",
+    "clockify_approvals_submit:canonical_below_3_of_3",
+    "clockify_approvals_submit:paraphrase_below_2_of_3",
+    "clockify_approvals_submit:typo_below_2_of_3",
+    "clockify_approvals_withdraw:canonical_below_3_of_3",
+    "clockify_approvals_withdraw:paraphrase_below_2_of_3",
+    "clockify_approvals_withdraw:typo_below_2_of_3",
+    "clockify_clients_archive:canonical_below_3_of_3",
+    "clockify_clients_archive:paraphrase_below_2_of_3",
+    "clockify_clients_archive:typo_below_2_of_3",
+    "clockify_clients_create_base:canonical_below_3_of_3",
+    "clockify_clients_create_base:paraphrase_below_2_of_3",
+    "clockify_clients_create_base:typo_below_2_of_3",
+    "clockify_clients_delete_archived:canonical_below_3_of_3",
+    "clockify_clients_delete_archived:paraphrase_below_2_of_3",
+    "clockify_clients_delete_archived:typo_below_2_of_3",
+    "clockify_clients_get:canonical_below_3_of_3",
+    "clockify_clients_get:paraphrase_below_2_of_3",
+    "clockify_clients_get:typo_below_2_of_3",
+    "clockify_clients_update:canonical_below_3_of_3",
+    "clockify_clients_update:paraphrase_below_2_of_3",
+    "clockify_clients_update:typo_below_2_of_3",
+    "clockify_custom_fields_create:canonical_below_3_of_3",
+    "clockify_custom_fields_create:paraphrase_below_2_of_3",
+    "clockify_custom_fields_create:typo_below_2_of_3",
+    "clockify_custom_fields_delete:canonical_below_3_of_3",
+    "clockify_custom_fields_delete:paraphrase_below_2_of_3",
+    "clockify_custom_fields_delete:typo_below_2_of_3",
+    "clockify_custom_fields_set_value_entry:canonical_below_3_of_3",
+    "clockify_custom_fields_set_value_entry:paraphrase_below_2_of_3",
+    "clockify_custom_fields_set_value_entry:typo_below_2_of_3",
+    "clockify_custom_fields_set_value_project:canonical_below_3_of_3",
+    "clockify_custom_fields_set_value_project:paraphrase_below_2_of_3",
+    "clockify_custom_fields_set_value_project:typo_below_2_of_3",
+    "clockify_custom_fields_update:canonical_below_3_of_3",
+    "clockify_custom_fields_update:paraphrase_below_2_of_3",
+    "clockify_custom_fields_update:typo_below_2_of_3",
+    "clockify_entity_changes_created:paraphrase_below_2_of_3",
+    "clockify_entity_changes_updated:canonical_below_3_of_3",
+    "clockify_entries_create:canonical_below_3_of_3",
+    "clockify_entries_create:paraphrase_below_2_of_3",
+    "clockify_entries_create:typo_below_2_of_3",
+    "clockify_entries_delete:canonical_below_3_of_3",
+    "clockify_entries_delete:paraphrase_below_2_of_3",
+    "clockify_entries_delete:typo_below_2_of_3",
+    "clockify_entries_get:canonical_below_3_of_3",
+    "clockify_entries_get:paraphrase_below_2_of_3",
+    "clockify_entries_get:typo_below_2_of_3",
+    "clockify_entries_list:paraphrase_below_2_of_3",
+    "clockify_entries_mark_invoiced:canonical_below_3_of_3",
+    "clockify_entries_mark_invoiced:paraphrase_below_2_of_3",
+    "clockify_entries_mark_invoiced:typo_below_2_of_3",
+    "clockify_entries_start:canonical_below_3_of_3",
+    "clockify_entries_start:paraphrase_below_2_of_3",
+    "clockify_entries_start:typo_below_2_of_3",
+    "clockify_entries_update:canonical_below_3_of_3",
+    "clockify_entries_update:paraphrase_below_2_of_3",
+    "clockify_entries_update:typo_below_2_of_3",
+    "clockify_expenses_categories_create:canonical_below_3_of_3",
+    "clockify_expenses_categories_create:paraphrase_below_2_of_3",
+    "clockify_expenses_categories_create:typo_below_2_of_3",
+    "clockify_expenses_categories_delete_archived:canonical_below_3_of_3",
+    "clockify_expenses_categories_delete_archived:paraphrase_below_2_of_3",
+    "clockify_expenses_categories_delete_archived:typo_below_2_of_3",
+    "clockify_expenses_categories_rename:canonical_below_3_of_3",
+    "clockify_expenses_categories_rename:paraphrase_below_2_of_3",
+    "clockify_expenses_categories_rename:typo_below_2_of_3",
+    "clockify_expenses_categories_status_update:canonical_below_3_of_3",
+    "clockify_expenses_categories_status_update:paraphrase_below_2_of_3",
+    "clockify_expenses_categories_status_update:typo_below_2_of_3",
+    "clockify_expenses_create:canonical_below_3_of_3",
+    "clockify_expenses_create:paraphrase_below_2_of_3",
+    "clockify_expenses_create:typo_below_2_of_3",
+    "clockify_expenses_delete:canonical_below_3_of_3",
+    "clockify_expenses_delete:paraphrase_below_2_of_3",
+    "clockify_expenses_delete:typo_below_2_of_3",
+    "clockify_expenses_get:paraphrase_below_2_of_3",
+    "clockify_expenses_get:typo_below_2_of_3",
+    "clockify_expenses_update:canonical_below_3_of_3",
+    "clockify_expenses_update:paraphrase_below_2_of_3",
+    "clockify_expenses_update:typo_below_2_of_3",
+    "clockify_groups_add_member:canonical_below_3_of_3",
+    "clockify_groups_add_member:paraphrase_below_2_of_3",
+    "clockify_groups_add_member:typo_below_2_of_3",
+    "clockify_groups_create:canonical_below_3_of_3",
+    "clockify_groups_create:paraphrase_below_2_of_3",
+    "clockify_groups_create:typo_below_2_of_3",
+    "clockify_groups_delete:canonical_below_3_of_3",
+    "clockify_groups_delete:paraphrase_below_2_of_3",
+    "clockify_groups_delete:typo_below_2_of_3",
+    "clockify_groups_remove_user:canonical_below_3_of_3",
+    "clockify_groups_remove_user:paraphrase_below_2_of_3",
+    "clockify_groups_remove_user:typo_below_2_of_3",
+    "clockify_groups_update:canonical_below_3_of_3",
+    "clockify_groups_update:paraphrase_below_2_of_3",
+    "clockify_groups_update:typo_below_2_of_3",
+    "clockify_holidays_create:canonical_below_3_of_3",
+    "clockify_holidays_create:paraphrase_below_2_of_3",
+    "clockify_holidays_create:typo_below_2_of_3",
+    "clockify_holidays_delete:canonical_below_3_of_3",
+    "clockify_holidays_delete:paraphrase_below_2_of_3",
+    "clockify_holidays_delete:typo_below_2_of_3",
+    "clockify_holidays_in_period:canonical_below_3_of_3",
+    "clockify_holidays_in_period:paraphrase_below_2_of_3",
+    "clockify_holidays_in_period:typo_below_2_of_3",
+    "clockify_holidays_list:paraphrase_below_2_of_3",
+    "clockify_holidays_update:canonical_below_3_of_3",
+    "clockify_holidays_update:paraphrase_below_2_of_3",
+    "clockify_holidays_update:typo_below_2_of_3",
+    "clockify_invoices_create_base:canonical_below_3_of_3",
+    "clockify_invoices_create_base:paraphrase_below_2_of_3",
+    "clockify_invoices_create_base:typo_below_2_of_3",
+    "clockify_invoices_delete:canonical_below_3_of_3",
+    "clockify_invoices_delete:paraphrase_below_2_of_3",
+    "clockify_invoices_delete:typo_below_2_of_3",
+    "clockify_invoices_export:canonical_below_3_of_3",
+    "clockify_invoices_export:paraphrase_below_2_of_3",
+    "clockify_invoices_fields_update:canonical_below_3_of_3",
+    "clockify_invoices_fields_update:paraphrase_below_2_of_3",
+    "clockify_invoices_fields_update:typo_below_2_of_3",
+    "clockify_invoices_get:canonical_below_3_of_3",
+    "clockify_invoices_get:paraphrase_below_2_of_3",
+    "clockify_invoices_get:typo_below_2_of_3",
+    "clockify_invoices_import_time:canonical_below_3_of_3",
+    "clockify_invoices_import_time:paraphrase_below_2_of_3",
+    "clockify_invoices_import_time:typo_below_2_of_3",
+    "clockify_invoices_items_add:canonical_below_3_of_3",
+    "clockify_invoices_items_add:paraphrase_below_2_of_3",
+    "clockify_invoices_items_add:typo_below_2_of_3",
+    "clockify_invoices_items_delete:canonical_below_3_of_3",
+    "clockify_invoices_items_delete:paraphrase_below_2_of_3",
+    "clockify_invoices_items_delete:typo_below_2_of_3",
+    "clockify_invoices_payments_create:canonical_below_3_of_3",
+    "clockify_invoices_payments_create:paraphrase_below_2_of_3",
+    "clockify_invoices_payments_create:typo_below_2_of_3",
+    "clockify_invoices_payments_delete:canonical_below_3_of_3",
+    "clockify_invoices_payments_delete:paraphrase_below_2_of_3",
+    "clockify_invoices_payments_delete:typo_below_2_of_3",
+    "clockify_invoices_payments_list:canonical_below_3_of_3",
+    "clockify_invoices_payments_list:paraphrase_below_2_of_3",
+    "clockify_invoices_payments_list:typo_below_2_of_3",
+    "clockify_invoices_status_update:canonical_below_3_of_3",
+    "clockify_invoices_status_update:paraphrase_below_2_of_3",
+    "clockify_invoices_status_update:typo_below_2_of_3",
+    "clockify_projects_archive:canonical_below_3_of_3",
+    "clockify_projects_archive:paraphrase_below_2_of_3",
+    "clockify_projects_archive:typo_below_2_of_3",
+    "clockify_projects_create:canonical_below_3_of_3",
+    "clockify_projects_create:paraphrase_below_2_of_3",
+    "clockify_projects_create:typo_below_2_of_3",
+    "clockify_projects_delete_archived:canonical_below_3_of_3",
+    "clockify_projects_delete_archived:paraphrase_below_2_of_3",
+    "clockify_projects_delete_archived:typo_below_2_of_3",
+    "clockify_projects_estimate_update:canonical_below_3_of_3",
+    "clockify_projects_estimate_update:paraphrase_below_2_of_3",
+    "clockify_projects_estimate_update:typo_below_2_of_3",
+    "clockify_projects_from_template:canonical_below_3_of_3",
+    "clockify_projects_from_template:paraphrase_below_2_of_3",
+    "clockify_projects_from_template:typo_below_2_of_3",
+    "clockify_projects_get:canonical_below_3_of_3",
+    "clockify_projects_get:paraphrase_below_2_of_3",
+    "clockify_projects_get:typo_below_2_of_3",
+    "clockify_projects_member_cost_rate_update:canonical_below_3_of_3",
+    "clockify_projects_member_cost_rate_update:paraphrase_below_2_of_3",
+    "clockify_projects_member_cost_rate_update:typo_below_2_of_3",
+    "clockify_projects_member_hourly_rate_update:canonical_below_3_of_3",
+    "clockify_projects_member_hourly_rate_update:paraphrase_below_2_of_3",
+    "clockify_projects_member_hourly_rate_update:typo_below_2_of_3",
+    "clockify_projects_memberships_replace:canonical_below_3_of_3",
+    "clockify_projects_memberships_replace:paraphrase_below_2_of_3",
+    "clockify_projects_memberships_replace:typo_below_2_of_3",
+    "clockify_projects_update:canonical_below_3_of_3",
+    "clockify_projects_update:paraphrase_below_2_of_3",
+    "clockify_projects_update:typo_below_2_of_3",
+    "clockify_scheduling_assignments_create:canonical_below_3_of_3",
+    "clockify_scheduling_assignments_create:paraphrase_below_2_of_3",
+    "clockify_scheduling_assignments_create:typo_below_2_of_3",
+    "clockify_scheduling_assignments_delete:canonical_below_3_of_3",
+    "clockify_scheduling_assignments_delete:paraphrase_below_2_of_3",
+    "clockify_scheduling_assignments_delete:typo_below_2_of_3",
+    "clockify_scheduling_assignments_list:canonical_below_3_of_3",
+    "clockify_scheduling_assignments_list:paraphrase_below_2_of_3",
+    "clockify_scheduling_assignments_list:typo_below_2_of_3",
+    "clockify_scheduling_assignments_update:canonical_below_3_of_3",
+    "clockify_scheduling_assignments_update:paraphrase_below_2_of_3",
+    "clockify_scheduling_assignments_update:typo_below_2_of_3",
+    "clockify_scheduling_project_totals_all:canonical_below_3_of_3",
+    "clockify_scheduling_project_totals_all:paraphrase_below_2_of_3",
+    "clockify_scheduling_project_totals_all:typo_below_2_of_3",
+    "clockify_scheduling_project_totals_one:canonical_below_3_of_3",
+    "clockify_scheduling_project_totals_one:paraphrase_below_2_of_3",
+    "clockify_scheduling_project_totals_one:typo_below_2_of_3",
+    "clockify_scheduling_publish:canonical_below_3_of_3",
+    "clockify_scheduling_publish:paraphrase_below_2_of_3",
+    "clockify_scheduling_publish:typo_below_2_of_3",
+    "clockify_scheduling_user_totals:canonical_below_3_of_3",
+    "clockify_scheduling_user_totals:paraphrase_below_2_of_3",
+    "clockify_scheduling_user_totals:typo_below_2_of_3",
+    "clockify_stop_timer:canonical_below_3_of_3",
+    "clockify_stop_timer:paraphrase_below_2_of_3",
+    "clockify_stop_timer:typo_below_2_of_3",
+    "clockify_tags_create:canonical_below_3_of_3",
+    "clockify_tags_create:paraphrase_below_2_of_3",
+    "clockify_tags_create:typo_below_2_of_3",
+    "clockify_tags_delete:canonical_below_3_of_3",
+    "clockify_tags_delete:paraphrase_below_2_of_3",
+    "clockify_tags_delete:typo_below_2_of_3",
+    "clockify_tags_get:canonical_below_3_of_3",
+    "clockify_tags_get:paraphrase_below_2_of_3",
+    "clockify_tags_get:typo_below_2_of_3",
+    "clockify_tags_update:canonical_below_3_of_3",
+    "clockify_tags_update:paraphrase_below_2_of_3",
+    "clockify_tags_update:typo_below_2_of_3",
+    "clockify_tasks_assignees_replace:canonical_below_3_of_3",
+    "clockify_tasks_assignees_replace:paraphrase_below_2_of_3",
+    "clockify_tasks_assignees_replace:typo_below_2_of_3",
+    "clockify_tasks_cost_rate_update:canonical_below_3_of_3",
+    "clockify_tasks_cost_rate_update:paraphrase_below_2_of_3",
+    "clockify_tasks_cost_rate_update:typo_below_2_of_3",
+    "clockify_tasks_create:canonical_below_3_of_3",
+    "clockify_tasks_create:paraphrase_below_2_of_3",
+    "clockify_tasks_create:typo_below_2_of_3",
+    "clockify_tasks_delete_completed:canonical_below_3_of_3",
+    "clockify_tasks_delete_completed:paraphrase_below_2_of_3",
+    "clockify_tasks_delete_completed:typo_below_2_of_3",
+    "clockify_tasks_get:canonical_below_3_of_3",
+    "clockify_tasks_get:paraphrase_below_2_of_3",
+    "clockify_tasks_get:typo_below_2_of_3",
+    "clockify_tasks_hourly_rate_update:canonical_below_3_of_3",
+    "clockify_tasks_hourly_rate_update:paraphrase_below_2_of_3",
+    "clockify_tasks_hourly_rate_update:typo_below_2_of_3",
+    "clockify_tasks_list:canonical_below_3_of_3",
+    "clockify_tasks_list:paraphrase_below_2_of_3",
+    "clockify_tasks_status_update:canonical_below_3_of_3",
+    "clockify_tasks_status_update:paraphrase_below_2_of_3",
+    "clockify_tasks_status_update:typo_below_2_of_3",
+    "clockify_tasks_update:canonical_below_3_of_3",
+    "clockify_tasks_update:paraphrase_below_2_of_3",
+    "clockify_tasks_update:typo_below_2_of_3",
+    "clockify_templates_get:canonical_below_3_of_3",
+    "clockify_templates_get:paraphrase_below_2_of_3",
+    "clockify_templates_get:typo_below_2_of_3",
+    "clockify_time_off_approve:canonical_below_3_of_3",
+    "clockify_time_off_approve:paraphrase_below_2_of_3",
+    "clockify_time_off_approve:typo_below_2_of_3",
+    "clockify_time_off_balance_update:canonical_below_3_of_3",
+    "clockify_time_off_balance_update:paraphrase_below_2_of_3",
+    "clockify_time_off_balance_update:typo_below_2_of_3",
+    "clockify_time_off_deny:canonical_below_3_of_3",
+    "clockify_time_off_deny:paraphrase_below_2_of_3",
+    "clockify_time_off_deny:typo_below_2_of_3",
+    "clockify_time_off_policies_archive:canonical_below_3_of_3",
+    "clockify_time_off_policies_archive:paraphrase_below_2_of_3",
+    "clockify_time_off_policies_archive:typo_below_2_of_3",
+    "clockify_time_off_policies_create:canonical_below_3_of_3",
+    "clockify_time_off_policies_create:paraphrase_below_2_of_3",
+    "clockify_time_off_policies_create:typo_below_2_of_3",
+    "clockify_time_off_policies_get:canonical_below_3_of_3",
+    "clockify_time_off_policies_get:paraphrase_below_2_of_3",
+    "clockify_time_off_policies_update:canonical_below_3_of_3",
+    "clockify_time_off_policies_update:paraphrase_below_2_of_3",
+    "clockify_time_off_policies_update:typo_below_2_of_3",
+    "clockify_time_off_requests_create_days:canonical_below_3_of_3",
+    "clockify_time_off_requests_create_days:paraphrase_below_2_of_3",
+    "clockify_time_off_requests_create_days:typo_below_2_of_3",
+    "clockify_time_off_requests_create_hours:canonical_below_3_of_3",
+    "clockify_time_off_requests_create_hours:paraphrase_below_2_of_3",
+    "clockify_time_off_requests_create_hours:typo_below_2_of_3",
+    "clockify_time_off_requests_delete:canonical_below_3_of_3",
+    "clockify_time_off_requests_delete:paraphrase_below_2_of_3",
+    "clockify_time_off_requests_delete:typo_below_2_of_3",
+    "clockify_users_cost_rate_update:canonical_below_3_of_3",
+    "clockify_users_cost_rate_update:paraphrase_below_2_of_3",
+    "clockify_users_cost_rate_update:typo_below_2_of_3",
+    "clockify_users_deactivate:canonical_below_3_of_3",
+    "clockify_users_deactivate:paraphrase_below_2_of_3",
+    "clockify_users_deactivate:typo_below_2_of_3",
+    "clockify_users_hourly_rate_update:canonical_below_3_of_3",
+    "clockify_users_hourly_rate_update:paraphrase_below_2_of_3",
+    "clockify_users_hourly_rate_update:typo_below_2_of_3",
+    "clockify_users_invite:canonical_below_3_of_3",
+    "clockify_users_invite:paraphrase_below_2_of_3",
+    "clockify_users_invite:typo_below_2_of_3",
+    "clockify_users_role_update:canonical_below_3_of_3",
+    "clockify_users_role_update:paraphrase_below_2_of_3",
+    "clockify_users_role_update:typo_below_2_of_3",
+    "clockify_webhooks_create:canonical_below_3_of_3",
+    "clockify_webhooks_create:paraphrase_below_2_of_3",
+    "clockify_webhooks_create:typo_below_2_of_3",
+    "clockify_webhooks_delete:canonical_below_3_of_3",
+    "clockify_webhooks_delete:paraphrase_below_2_of_3",
+    "clockify_webhooks_delete:typo_below_2_of_3",
+    "clockify_webhooks_get:canonical_below_3_of_3",
+    "clockify_webhooks_get:paraphrase_below_2_of_3",
+    "clockify_webhooks_get:typo_below_2_of_3",
+    "clockify_webhooks_list:canonical_below_3_of_3",
+    "clockify_webhooks_list:paraphrase_below_2_of_3",
+    "clockify_webhooks_list:typo_below_2_of_3",
+    "clockify_webhooks_logs:canonical_below_3_of_3",
+    "clockify_webhooks_logs:paraphrase_below_2_of_3",
+    "clockify_webhooks_logs:typo_below_2_of_3",
+    "clockify_webhooks_update:canonical_below_3_of_3",
+    "clockify_webhooks_update:paraphrase_below_2_of_3",
+    "clockify_webhooks_update:typo_below_2_of_3"
+  ]
+}

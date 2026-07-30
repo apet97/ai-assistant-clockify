@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "kind": "v2_api_discovery_diagnostic_provenance",
+  "generatedAt": "2026-07-30T21:59:58.000Z",
+  "secretFree": true,
+  "contentInspection": {
+    "redactionApplied": false,
+    "credentialOrHeaderFieldsFound": false,
+    "rawPromptsOrProviderResponsesFound": false
+  },
+  "status": "diagnostic_void_as_model_evidence",
+  "historicalStatus": {
+    "status": "diagnostic_void_as_model_evidence",
+    "validForModelEvidence": false,
+    "validForReleaseEvidence": false,
+    "reason": "D-5: the pre-M evaluator could not credit correctly prepared writes and also mixed ranking, auth-class, and under-specified-corpus defects into the reported score.",
+    "replacement": "A post-M E2 credentialed API-discovery evaluation on the frozen release candidate replaces this diagnostic as model evidence."
+  },
+  "source": {
+    "pathAtBinding": "/Users/15x/Downloads/eval-api-discovery-ad06c08-2026-07-30.json",
+    "headAtRun": "ad06c083d3e1fc6194dd2fa7b1c6710cc190736e",
+    "createdAt": "2026-07-30T05:06:02.359Z",
+    "modifiedAt": "2026-07-30T05:06:02.360Z"
+  },
+  "boundArtifact": {
+    "path": "evidence/eval/v2-api-discovery-diagnostic-ad06c08.json",
+    "bytes": 182840,
+    "sha256": "15798b8720c4ab1cece182618415088e98210420ae56f57a23772dd49fd129e9",
+    "bytePreserved": true
+  },
+  "runIdentity": {
+    "candidateSha": "ad06c083d3e1fc6194dd2fa7b1c6710cc190736e",
+    "catalogHash": "3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7",
+    "registryId": "v2-api",
+    "modelConfiguration": "provider=http model=deepseek-v4-pro",
+    "corpusVersion": "v2-discovery-pre-m-unversioned-v0",
+    "sourceIdentityIncludedCorpusVersion": false
+  },
+  "diagnosticSummary": {
+    "rootCauseId": "D-5",
+    "reportedScore": {
+      "numerator": 239,
+      "denominator": 1143,
+      "validAsModelEvidence": false
+    },
+    "apportionedFailures": [
+      {
+        "category": "harness_detection_artifact",
+        "attempts": 612,
+        "confidence": "proven"
+      },
+      {
+        "category": "scoring_rule_and_ranking_fill",
+        "attempts": 84,
+        "confidence": "high"
+      },
+      {
+        "category": "corpus_auth_defect",
+        "attempts": 63,
+        "confidence": "proven"
+      },
+      {
+        "category": "argument_free_corpus",
+        "attempts": 36,
+        "confidence": "high"
+      },
+      {
+        "category": "same_argument_free_bind_stochastic",
+        "attempts": 80,
+        "confidence": "medium"
+      },
+      {
+        "category": "genuine_model_or_ranking_signal",
+        "attempts": 29,
+        "confidence": "medium"
+      }
+    ]
+  }
+}
