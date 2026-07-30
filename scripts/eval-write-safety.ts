@@ -13,6 +13,7 @@ import {
   type EvalReport,
 } from "./eval-v2/report.js";
 import { candidateSha, evalIdentity, modelConfigurationFromEnvironment } from "./eval-v2/runner-harness.js";
+import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
 import {
   buildV2AuthorityEvidenceReport,
   V2_AUTHORITY_NOT_EVALUATED_SENTINEL,
@@ -33,9 +34,14 @@ import {
  * into the T13 `V2AuthorityEvidence` artifact. It never re-implements the proofs
  * and never marks an invariant satisfied on its own authority — a violation
  * report or an incomplete run yields no artifact at all.
+ *
+ * Plan B4: when `EVAL_WRITE_SAFETY_EVIDENCE_PATH` is set, the report printed
+ * to stdout is ALSO written byte-identically to that path (mode 0600, existing
+ * file refused) via the shared evidence-path contract.
  */
 
 const KIND = "v2_write_safety";
+const EVIDENCE_PATH_VARIABLE = "EVAL_WRITE_SAFETY_EVIDENCE_PATH";
 
 export interface WriteSafetyObservation {
   actionName: string;
@@ -138,7 +144,7 @@ export function blockedWriteSafetyReport(reason: string): EvalReport {
   });
 }
 
-function main(): void {
+export function main(): void {
   // The proofs live in vitest. Running this script alone therefore reports the
   // matrix shape plus an explicit blocked status — never a pass.
   const report = blockedWriteSafetyReport(
@@ -146,12 +152,12 @@ function main(): void {
     + "`npx vitest run tests/integration/v2-write-safety-matrix.test.ts` to produce observations, "
     + "then aggregate with authorityEvidenceFromReport.",
   );
-  process.stdout.write(`${JSON.stringify({
+  emitEvalReport({
     ...report,
     expectedChecks: writeSafetyExpectedChecks(),
     invariants: WRITE_SAFETY_INVARIANTS,
     authority: authorityEvidenceFromReport(report),
-  }, null, 2)}\n`);
+  }, evalEvidenceSink(EVIDENCE_PATH_VARIABLE));
   process.exitCode = 2;
 }
 

@@ -20,6 +20,7 @@ import {
   runRealAssistantTurn,
   type HarnessRun,
 } from "./eval-v2/runner-harness.js";
+import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
 
 /**
  * T17-C: terminal-outcome evaluation. Every attempt is scored on the run's FINAL
@@ -46,9 +47,14 @@ import {
  * than fabricate a model-turn scenario for them, this report DELEGATES those two
  * cohorts, naming the shipped suites that prove them. The delegation is machine
  * readable and is reported, never silently dropped.
+ *
+ * Plan B4: when `EVAL_ASSISTANT_TERMINAL_EVIDENCE_PATH` is set, the report
+ * printed to stdout is ALSO written byte-identically to that path (mode 0600,
+ * existing file refused) via the shared evidence-path contract.
  */
 
 const KIND = "v2_assistant_terminal";
+const EVIDENCE_PATH_VARIABLE = "EVAL_ASSISTANT_TERMINAL_EVIDENCE_PATH";
 
 /**
  * Cohorts this evaluator actually DRIVES today. A cohort needs a real scenario —
@@ -232,9 +238,9 @@ export async function runTerminalEvaluation(): Promise<EvalReport & {
   };
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const report = await runTerminalEvaluation();
-  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  emitEvalReport(report, evalEvidenceSink(EVIDENCE_PATH_VARIABLE));
   if (!report.releasable) {
     process.exitCode = 2;
   }

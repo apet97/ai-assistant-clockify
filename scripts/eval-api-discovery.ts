@@ -22,6 +22,7 @@ import {
   modelConfigurationFromEnvironment,
   runRealAssistantTurn,
 } from "./eval-v2/runner-harness.js";
+import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
 
 /**
  * T17-B: API-discovery evaluation through the REAL runner.
@@ -41,9 +42,14 @@ import {
  * Without model credentials this emits the exact
  * `not_evaluated_missing_credentials` report and exits non-zero. It never sources
  * `.env.server` and never invents a score.
+ *
+ * Plan B4: when `EVAL_API_DISCOVERY_EVIDENCE_PATH` is set, the report printed
+ * to stdout is ALSO written byte-identically to that path (mode 0600, existing
+ * file refused) via the shared evidence-path contract.
  */
 
 const KIND = "v2_api_discovery";
+const EVIDENCE_PATH_VARIABLE = "EVAL_API_DISCOVERY_EVIDENCE_PATH";
 const COHORT_ORDER = ["canonical", "paraphrase", "typo"] as const;
 type Cohort = (typeof COHORT_ORDER)[number];
 
@@ -178,10 +184,10 @@ export function discoveryThresholdViolations(report: EvalReport): string[] {
   return violations.sort();
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const report = await runApiDiscoveryEvaluation();
   const violations = discoveryThresholdViolations(report);
-  process.stdout.write(`${JSON.stringify({ ...report, thresholdViolations: violations }, null, 2)}\n`);
+  emitEvalReport({ ...report, thresholdViolations: violations }, evalEvidenceSink(EVIDENCE_PATH_VARIABLE));
   if (report.status !== "passed" || violations.length > 0 || !isReleasableReport(report)) {
     process.exitCode = 2;
   }
