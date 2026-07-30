@@ -167,6 +167,17 @@ const STRUCTURED_PRESENTATIONS = {
       verifiedAt: "2026-07-18T10:00:00.000Z",
     }],
   },
+  "structured-no-change": {
+    // The envelope `result-view-service.ts` derives for the real no-op
+    // stop-timer receipt (ok:true + warning, no data, no changed — readiness
+    // A5 / D-3): status no_change_needed, warnings preserved, empty summary.
+    status: "no_change_needed",
+    title: "Stop timer",
+    summary: "",
+    facts: [],
+    warnings: [{ code: "warning_0", message: "No running timer to stop." }],
+    references: [],
+  },
   "structured-failed": {
     status: "failed",
     title: "Create a tag",

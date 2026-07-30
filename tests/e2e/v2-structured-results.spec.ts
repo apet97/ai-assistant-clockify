@@ -4,7 +4,7 @@ import { openAssistant, send } from "./helpers.js";
 /**
  * T15-E: the full structured `PresentedResultEnvelope` — facts, warnings,
  * references, recovery, and the technical-details diagnostic disclosure —
- * across all six `PresentedResult` statuses. Production's own
+ * across all seven `PresentedResult` statuses. Production's own
  * `chatResultToPresentation` doesn't yet populate every field for a real
  * domain (flagged for the T14-T16 review gate); the fixture server fabricates
  * real `run_event` frames carrying the full envelope so this exercises the
@@ -20,6 +20,16 @@ test("succeeded: facts and references render with a human title, no raw action i
   await expect(card).toContainText("Tag name");
   await expect(card).toContainText("Billable");
   await expect(card.locator(".receipt-references")).toContainText("Billable");
+});
+
+test('no change needed: a deliberate no-op renders its own neutral label, never "Done" (readiness A5 / D-3)', async ({ page }) => {
+  await openAssistant(page);
+  await send(page, "structured-no-change");
+  const card = page.getByRole("group", { name: "No change needed: Stop timer" });
+  await expect(card).toBeVisible();
+  await expect(card).toContainText("No running timer to stop.");
+  // The header is neither the plain-success copy nor the ok+warnings override.
+  await expect(card.locator("strong").first()).toHaveText("No change needed");
 });
 
 test("failed: warnings render distinctly from a success", async ({ page }) => {

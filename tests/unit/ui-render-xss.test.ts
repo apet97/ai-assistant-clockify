@@ -289,7 +289,7 @@ describe("render-XSS: attacker-named entities render as inert text (r2-injection
  * status (`run-event-hydration.ts`'s `chatResultToPresentation` currently
  * produces only succeeded/failed/pending_confirmation — flagged for the
  * T14-T16 review gate), so this drives the render layer directly with
- * fixture data covering all six `PresentedResult` statuses, proving the MECHANISM
+ * fixture data covering all seven `PresentedResult` statuses, proving the MECHANISM
  * renders each distinctly and never derives an accessible name from a raw
  * `clockify_*` action id.
  */
@@ -301,7 +301,9 @@ describe("T15-E: structured result statuses render distinctly, never exposing a 
     return {
       kind: "receipt",
       receipt: {
-        ok: presentedStatus === "succeeded" || presentedStatus === "partial",
+        // Mirrors the server's `chatReceiptFromEnvelope` / the client's
+        // `attachmentToResults` ok-bit classification exactly.
+        ok: presentedStatus === "succeeded" || presentedStatus === "partial" || presentedStatus === "no_change_needed",
         action: HUMAN_TITLE,
         message: "A human-readable summary.",
         presentedStatus,
@@ -309,9 +311,10 @@ describe("T15-E: structured result statuses render distinctly, never exposing a 
     };
   }
 
-  const statuses = ["succeeded", "failed", "partial", "cancelled", "outcome_unknown"] as const;
+  const statuses = ["succeeded", "no_change_needed", "failed", "partial", "cancelled", "outcome_unknown"] as const;
   const labels: Record<(typeof statuses)[number], string> = {
     succeeded: "Done",
+    no_change_needed: "No change needed",
     failed: "Failed",
     partial: "Partial — review needed",
     cancelled: "Cancelled",
@@ -331,6 +334,24 @@ describe("T15-E: structured result statuses render distinctly, never exposing a 
       expect(ariaLabel).not.toMatch(CLOCKIFY_ID_PATTERN);
     });
   }
+
+  it('a no-op WITH warnings renders "No change needed" — never "Done — with notes" (D-3)', () => {
+    // The ok+warnings "Done — with notes" override must be reserved for the
+    // "ok" cls; the neutral no-op card keeps its own truthful header.
+    const receipt = receiptFor("no_change_needed");
+    receipt.receipt.warnings = [{ message: "No running timer to stop." }];
+    const card = renderReceipt(receipt, {
+      controller: {} as never,
+      showError: () => {},
+    }) as unknown as StubNode;
+    const text = card.allText();
+    expect(text).toContain("No change needed");
+    expect(text).toContain("No running timer to stop.");
+    expect(text).not.toContain("Done — with notes");
+    expect(text).not.toContain("Done");
+    expect(text).not.toContain("Failed");
+    expect(card.getAttribute("aria-label")).toBe(`No change needed: ${HUMAN_TITLE}`);
+  });
 
   it("renders pending_confirmation via renderPreview with no raw action id in any text", () => {
     const preview: PreviewResult = {

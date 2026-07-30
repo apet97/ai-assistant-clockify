@@ -256,6 +256,10 @@ const stopTimer = defineDurableSafeWriteAction({
     });
     const entry = result.value;
     if (!entry) {
+      // Deliberate no-op: ok + warning with NO `data` and NO `changed` is the
+      // exact shape `result-view-service.ts` presents as "No change needed"
+      // (readiness A5 / D-3). Adding a `data` payload here would silently
+      // reclassify this receipt as a plain success — don't.
       return {
         result: successReceipt({
           action: "clockify_stop_timer",

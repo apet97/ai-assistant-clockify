@@ -84,7 +84,9 @@ export interface PresentReadResultInput {
 /**
  * Render a read result. The server derives status (always `succeeded` — a
  * read either returns canonical data or throws before this is ever called;
- * there is no partial/pending/cancelled/outcome_unknown state for a read),
+ * no other terminal status applies to a read, and the deliberate-no-op
+ * reclassification to `no_change_needed` lives in `result-view-service.ts`,
+ * which reads never enter because they always carry `data`),
  * `facts`, `warnings`, and `references` from `input` — the caller's canonical
  * result state, never the provider. The provider's ONLY contribution is
  * `providerSummary`, sanitized and byte-capped; when it was truncated a

@@ -79,6 +79,7 @@ export interface PresentedDiagnosticView {
  * sets this field and keeps its existing ok-boolean-derived rendering. */
 export type PresentedStatus =
   | "succeeded"
+  | "no_change_needed"
   | "failed"
   | "partial"
   | "pending_confirmation"
@@ -317,7 +318,9 @@ export function attachmentToResults(attachment: RunEventAttachment): ChatResult[
     return [{
       kind: "receipt",
       receipt: {
-        ok: status === "succeeded" || status === "partial",
+        // A deliberate no-op ("no_change_needed") is a success for the ok bit;
+        // its distinct "No change needed" header derives from presentedStatus.
+        ok: status === "succeeded" || status === "partial" || status === "no_change_needed",
         action: presentation.title,
         message: presentation.summary,
         presentedStatus: status,

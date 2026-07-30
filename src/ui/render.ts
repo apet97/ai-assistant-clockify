@@ -60,6 +60,9 @@ export const ICON_CHECK = "M5 13l4 4L19 7";
 export const ICON_X = "M6 6l12 12M18 6L6 18";
 export const ICON_ALERT = "M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z";
 export const ICON_CLOCK = "M12 8v4l2.5 2.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
+// Neutral circled dash for a deliberate no-op ("No change needed") — neither a
+// success check nor a warning triangle.
+export const ICON_NEUTRAL = "M8 12h8M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
 export const ICON_CHEVRON = "M9 6l6 6-6 6";
 export const ICON_GEAR = "M4 7h10M18 7h2M4 17h2M10 17h10M14 5v4M8 15v4";
 
@@ -455,6 +458,9 @@ const STATUS_VIEW: Record<
   { label: string; cls: string; icon: string }
 > = {
   succeeded: { label: "Done", cls: "ok", icon: ICON_CHECK },
+  // A deliberate no-op (readiness A5 / D-3): neutral cls, NOT "ok", so the
+  // "Done — with notes" ok+warnings override below can never claim it.
+  no_change_needed: { label: "No change needed", cls: "neutral", icon: ICON_NEUTRAL },
   failed: { label: "Failed", cls: "error", icon: ICON_X },
   partial: { label: "Partial — review needed", cls: "warn", icon: ICON_ALERT },
   cancelled: { label: "Cancelled", cls: "warn", icon: ICON_X },

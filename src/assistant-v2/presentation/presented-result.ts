@@ -23,6 +23,10 @@ import { TOOL_RESULT_MAX_BYTES } from "../../assistant/tool-results.js";
 
 export const PRESENTED_RESULT_STATUSES = [
   "succeeded",
+  /** Terminal success that deliberately changed nothing (readiness plan A5 /
+   * defect D-3) — e.g. "stop timer" with no running timer. Renders as
+   * "No change needed", never "Done" and never "Failed". */
+  "no_change_needed",
   "failed",
   "partial",
   "pending_confirmation",

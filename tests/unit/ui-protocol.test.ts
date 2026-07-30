@@ -158,6 +158,72 @@ describe("UI runtime protocol contracts", () => {
     })).toThrow(ProtocolError);
   });
 
+  it("decodes a run_event presented_result carrying the no_change_needed status (readiness A5)", () => {
+    const frame = {
+      type: "run_event",
+      runId: "run-1",
+      sequence: 1,
+      event: { eventType: "tool.completed", payload: {}, createdAt: "2026-07-30T10:00:00.000Z" },
+      attachment: {
+        kind: "presented_result",
+        actionResultId: "ar-1",
+        envelope: {
+          presentation: {
+            status: "no_change_needed",
+            title: "Stop timer",
+            summary: "",
+            facts: [],
+            warnings: [{ code: "warning_0", message: "No running timer to stop." }],
+            references: [],
+          },
+        },
+      },
+    };
+    const decoded = decodeNdjsonEvent(frame);
+    expect(decoded).toMatchObject({
+      type: "run_event",
+      attachment: { kind: "presented_result", envelope: { presentation: { status: "no_change_needed" } } },
+    });
+  });
+
+  it("still rejects an unknown presented status on a run_event attachment", () => {
+    expect(() => decodeNdjsonEvent({
+      type: "run_event",
+      runId: "run-1",
+      sequence: 1,
+      event: { eventType: "tool.completed", payload: {}, createdAt: "2026-07-30T10:00:00.000Z" },
+      attachment: {
+        kind: "presented_result",
+        actionResultId: "ar-1",
+        envelope: {
+          presentation: { status: "almost_done", title: "x", summary: "", facts: [], warnings: [], references: [] },
+        },
+      },
+    })).toThrow(ProtocolError);
+  });
+
+  it("decodeReceipt preserves a valid presentedStatus and drops an unknown one (history restore)", () => {
+    const noop = decodeReceipt({
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "Stop timer",
+        presentedStatus: "no_change_needed",
+        warnings: [{ message: "No running timer to stop." }],
+      },
+    });
+    expect(noop.receipt.presentedStatus).toBe("no_change_needed");
+
+    const unknown = decodeReceipt({
+      kind: "receipt",
+      receipt: { ok: true, action: "Stop timer", presentedStatus: "almost_done" },
+    });
+    expect(unknown.receipt.presentedStatus).toBeUndefined();
+
+    const legacy = decodeReceipt({ kind: "receipt", receipt: { ok: true, action: "clockify_tags_create" } });
+    expect(legacy.receipt.presentedStatus).toBeUndefined();
+  });
+
   it("rejects a cross-origin artifact URL", () => {
     expect(() => decodeReceipt({
       kind: "receipt",

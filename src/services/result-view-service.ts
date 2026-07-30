@@ -8,6 +8,7 @@ import {
 } from "../assistant-v2/presentation/presented-result.js";
 import { presentReadResult } from "./result-presentation-service.js";
 import { defaultTitle } from "../harness/prepared-write-presentation.js";
+import { hasChanges, type ChangeSet } from "../harness/receipts.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 
@@ -91,12 +92,23 @@ function presentationFromStored(
   const receipt = row ? asRecord(row.receipt) : undefined;
   if (row?.kind === "receipt" && receipt) {
     if (receipt.ok === true) {
-      return presentReadResult({
+      const presented = presentReadResult({
         title,
         providerSummary: typeof receipt.message === "string" ? receipt.message : undefined,
         facts: factsFromReceipt(receipt),
         warnings: boundedWarnings(receipt.warnings),
       });
+      // A success that deliberately changed nothing must SAY so (readiness
+      // plan A5 / defect D-3). `successReceipt` omits empty change buckets by
+      // construction, so ok:true with no `data` payload and no non-empty
+      // `changed` bucket is the no-op shape — e.g. "stop timer" with no
+      // running timer. Reads always carry `data` (listReceipt always sets it),
+      // so they never take this branch; `presentReadResult` itself stays the
+      // unconditional read-only "succeeded" presenter.
+      if (receipt.data === undefined && !hasChanges(receipt.changed as ChangeSet | undefined)) {
+        return { ...presented, status: "no_change_needed" };
+      }
+      return presented;
     }
     return {
       status: "failed",
@@ -222,7 +234,11 @@ export function chatReceiptFromEnvelope(envelope: PresentedResultEnvelope): Reco
   return {
     kind: "receipt",
     receipt: {
-      ok: presentation.status === "succeeded" || presentation.status === "partial",
+      // A deliberate no-op is a SUCCESS for the ok bit (nothing failed); its
+      // distinct header comes from `presentedStatus`, preserved below.
+      ok: presentation.status === "succeeded"
+        || presentation.status === "partial"
+        || presentation.status === "no_change_needed",
       action: presentation.title,
       message: presentation.summary,
       presentedStatus: presentation.status,

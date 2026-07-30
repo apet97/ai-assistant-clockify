@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { requireCompletePresenterCoverage } from "../../src/assistant-v2/presentation/presenter-registry.js";
 import { decodePresentedResultEnvelope } from "../../src/assistant-v2/presentation/presented-result.js";
-import { createResultViewService, factsFromReceipt } from "../../src/services/result-view-service.js";
+import { chatReceiptFromEnvelope, createResultViewService, factsFromReceipt } from "../../src/services/result-view-service.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 
 /**
@@ -74,6 +74,67 @@ describe("result view service", () => {
     expect(envelope.presentation.status).toBe("failed");
     expect(envelope.presentation.summary).toBe("Which Alice?");
     expect(envelope.presentation.warnings[0]!.code).toBe("clarification_required");
+  });
+
+  it("presents the no-op stop-timer receipt as NO CHANGE NEEDED, never a plain success (readiness A5 / D-3)", () => {
+    // The EXACT receipt src/harness/workflows/time-tracking.ts returns when
+    // there is no running timer: ok:true + a warning, no `data`, no `changed`
+    // (`successReceipt` omits empty change buckets by construction).
+    const envelope = service.presentActionResult("clockify_stop_timer", "result-noop", {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "clockify_stop_timer",
+        warnings: [{ message: "No running timer to stop." }],
+      },
+    });
+    expect(() => decodePresentedResultEnvelope(envelope)).not.toThrow();
+    expect(envelope.presentation.status).toBe("no_change_needed");
+    expect(envelope.presentation.warnings).toContainEqual(
+      expect.objectContaining({ message: "No running timer to stop." }),
+    );
+  });
+
+  it("a warnings-only success WITH data (a read) stays succeeded — never reclassified as a no-op", () => {
+    // The clockify_period_report / reports shape: ok + warning + data payload.
+    const envelope = service.presentActionResult("clockify_reports_summary", "result-report", {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "clockify_reports_summary",
+        data: { totalSeconds: 0 },
+        warnings: [{ code: "report_truncated", message: "The report was truncated." }],
+      },
+    });
+    expect(envelope.presentation.status).toBe("succeeded");
+  });
+
+  it("a success with a non-empty changed bucket stays succeeded", () => {
+    const envelope = service.presentActionResult("clockify_tags_create", "result-created", {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "clockify_tags_create",
+        changed: { created: [{ type: "tag", id: "t1", name: "urgent" }] },
+      },
+    });
+    expect(envelope.presentation.status).toBe("succeeded");
+  });
+
+  it("chatReceiptFromEnvelope classifies no_change_needed as ok:true and preserves the status", () => {
+    const envelope = service.presentActionResult("clockify_stop_timer", "result-noop-2", {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "clockify_stop_timer",
+        warnings: [{ message: "No running timer to stop." }],
+      },
+    });
+    const chatReceipt = chatReceiptFromEnvelope(envelope) as {
+      receipt: { ok: boolean; presentedStatus: string };
+    };
+    expect(chatReceipt.receipt.ok).toBe(true);
+    expect(chatReceipt.receipt.presentedStatus).toBe("no_change_needed");
   });
 
   it("derives change facts from a safe-write receipt", () => {

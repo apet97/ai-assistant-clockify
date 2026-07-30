@@ -558,6 +558,11 @@ button.chip.chip-selected {
   border-left-color: var(--danger);
 }
 
+/* Deliberate no-op ("No change needed"): neutral, neither success nor warning. */
+.receipt.neutral {
+  border-left-color: var(--border-strong);
+}
+
 .receipt-head {
   display: flex;
   align-items: center;
@@ -598,6 +603,11 @@ button.chip.chip-selected {
 .receipt.error .receipt-icon {
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.receipt.neutral .receipt-icon {
+  background: var(--surface-inset);
+  color: var(--text-3);
 }
 
 .receipt.ok strong {

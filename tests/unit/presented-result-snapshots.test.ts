@@ -28,9 +28,14 @@ function baseResult(status: (typeof PRESENTED_RESULT_STATUSES)[number]) {
   };
 }
 
-describe("T15-A: presentedResultSchema — all six statuses", () => {
+describe("T15-A: presentedResultSchema — all seven statuses", () => {
   it.each(PRESENTED_RESULT_STATUSES)("accepts status %s", (status) => {
     expect(() => presentedResultSchema.parse(baseResult(status))).not.toThrow();
+  });
+
+  it("includes the deliberate no-op status (readiness A5)", () => {
+    expect(PRESENTED_RESULT_STATUSES).toContain("no_change_needed");
+    expect(PRESENTED_RESULT_STATUSES).toHaveLength(7);
   });
 
   it("rejects an unrecognized status", () => {
@@ -270,6 +275,19 @@ describe("T15-A: decodePresentedResultEnvelope snapshots", () => {
         },
       }
     `);
+  });
+
+  it("round-trips a no_change_needed envelope (deliberate no-op, readiness A5)", () => {
+    const envelope = decodePresentedResultEnvelope({
+      presentation: {
+        ...baseResult("no_change_needed"),
+        summary: "",
+        warnings: [{ code: "warning_0", message: "No running timer to stop." }],
+      },
+      actionResultId: "ar-noop",
+    });
+    expect(envelope.presentation.status).toBe("no_change_needed");
+    expect(envelope.presentation.warnings).toEqual([{ code: "warning_0", message: "No running timer to stop." }]);
   });
 
   it("round-trips a pending_confirmation envelope with the live control", () => {

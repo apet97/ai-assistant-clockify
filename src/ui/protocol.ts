@@ -294,6 +294,20 @@ function warningsFrom(value: unknown): Array<{ code?: string; message: string }>
   });
 }
 
+/** The full v2 `PresentedResult` status set (hand-maintained twin of
+ * `PRESENTED_RESULT_STATUSES`; the operation/step status sets above are a
+ * DIFFERENT enum). Shared by the strict run_event attachment gate and the
+ * lenient legacy-receipt passthrough below. */
+const PRESENTED_RESULT_STATUS_SET = new Set([
+  "succeeded",
+  "no_change_needed",
+  "failed",
+  "partial",
+  "pending_confirmation",
+  "cancelled",
+  "outcome_unknown",
+]);
+
 /** Decode the receipt subset rendered by the UI, preserving unknown safe fields. */
 export function decodeReceipt(value: unknown): ReceiptResult {
   const result = record(value, "result");
@@ -308,6 +322,16 @@ export function decodeReceipt(value: unknown): ReceiptResult {
     ...(optionalString(raw.message, "result.receipt.message") ? { message: raw.message as string } : {}),
     ...(raw.changed === undefined ? {} : { changed: raw.changed }),
     ...(warnings ? { warnings } : {}),
+    // Presentation-only status passthrough (readiness A5): a v2 history row
+    // serialized by `chatReceiptFromEnvelope` carries the presented status, so
+    // a reload renders the SAME header the live stream showed (e.g. "No change
+    // needed", never a relapsed "Done — with notes"). A legacy v1 receipt
+    // never sets the field; an unrecognized value degrades to the ok-boolean
+    // rendering instead of rejecting the whole page — display-only data, so
+    // fail-open is safe here (the strict run_event gate stays strict).
+    ...(typeof raw.presentedStatus === "string" && PRESENTED_RESULT_STATUS_SET.has(raw.presentedStatus)
+      ? { presentedStatus: raw.presentedStatus as ReceiptResult["receipt"]["presentedStatus"] }
+      : {}),
   };
   if (raw.ok && action === "clockify_invoices_export") {
     if (raw.data === undefined) throw new ProtocolError("receipt.data is required after invoice export");
@@ -783,8 +807,7 @@ function decodeRunEventAttachment(value: unknown): import("../shared/contracts.j
     const envelope = record(attachment.envelope, "stream event.attachment.envelope");
     const presentation = record(envelope.presentation, "stream event.attachment.envelope.presentation");
     const status = string(presentation.status, "stream event.attachment.envelope.presentation.status");
-    const allowedStatuses = new Set(["succeeded", "failed", "partial", "pending_confirmation", "cancelled", "outcome_unknown"]);
-    if (!allowedStatuses.has(status)) throw new ProtocolError("stream event.attachment.envelope.presentation.status is unknown");
+    if (!PRESENTED_RESULT_STATUS_SET.has(status)) throw new ProtocolError("stream event.attachment.envelope.presentation.status is unknown");
     const recovery = presentedRecoveryFrom(presentation.recovery, "stream event.attachment.envelope.presentation.recovery");
     const decodedEnvelope = {
       presentation: {
