@@ -131,10 +131,6 @@ export function incrementApiCallsUsed(budget: RunBudget): RunBudget {
   return { ...budget, apiCallsUsed: budget.apiCallsUsed + 1 };
 }
 
-export function addActiveWallMs(budget: RunBudget, deltaMs: number): RunBudget {
-  return { ...budget, activeWallMsUsed: budget.activeWallMsUsed + deltaMs };
-}
-
 export function canReserveModelCall(budget: RunBudget): boolean {
   return budget.modelCallsUsed < V2_LIMITS.maxModelCalls;
 }
@@ -157,14 +153,6 @@ export function reserveHostCalls(budget: RunBudget, count: number): RunBudget {
 
 export function releaseHostCallReservation(budget: RunBudget, count: number): RunBudget {
   return { ...budget, hostCallsReserved: Math.max(0, budget.hostCallsReserved - count) };
-}
-
-export function dispatchHostCall(budget: RunBudget): RunBudget {
-  return {
-    ...budget,
-    hostCallsUsed: budget.hostCallsUsed + 1,
-    hostCallsReserved: Math.max(0, budget.hostCallsReserved - 1),
-  };
 }
 
 export function isActiveWallBudgetExceeded(budget: RunBudget): boolean {
