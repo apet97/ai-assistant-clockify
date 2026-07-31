@@ -103,10 +103,6 @@ export function totalChargedTokens(budget: RunBudget): number {
   return budget.promptTokensUsed + budget.completionTokensUsed + budget.estimatedTokensUsed;
 }
 
-export function hostCallsCommitted(budget: RunBudget): number {
-  return budget.hostCallsUsed + budget.hostCallsReserved;
-}
-
 export function isTerminalPhase(phase: RunPhase): boolean {
   return TERMINAL_RUN_PHASES.has(phase);
 }

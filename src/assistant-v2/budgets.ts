@@ -119,28 +119,12 @@ export function chargeFailedModelAttempt(
   };
 }
 
-export function incrementModelCallsUsed(budget: RunBudget): RunBudget {
-  return { ...budget, modelCallsUsed: budget.modelCallsUsed + 1 };
-}
-
-export function incrementDiscoveryCallsUsed(budget: RunBudget): RunBudget {
-  return { ...budget, discoveryCallsUsed: budget.discoveryCallsUsed + 1 };
-}
-
-export function incrementApiCallsUsed(budget: RunBudget): RunBudget {
-  return { ...budget, apiCallsUsed: budget.apiCallsUsed + 1 };
-}
-
 export function canReserveModelCall(budget: RunBudget): boolean {
   return budget.modelCallsUsed < V2_LIMITS.maxModelCalls;
 }
 
 export function canReserveDiscoveryCall(budget: RunBudget): boolean {
   return budget.discoveryCallsUsed < V2_LIMITS.maxDiscoveryCalls;
-}
-
-export function canReserveApiCall(budget: RunBudget): boolean {
-  return budget.apiCallsUsed < V2_LIMITS.maxApiCalls;
 }
 
 export function canReserveHostCalls(budget: RunBudget, count: number): boolean {

@@ -1,6 +1,5 @@
 import type {
   RunEventAttachment,
-  RunEventType,
   RunEventView,
   SequencedRunEvent,
 } from "../assistant-v2/events.js";
@@ -166,12 +165,4 @@ export function hydrateRunEventAttachments(
     if (!attachment) return entry;
     return { ...entry, attachment };
   });
-}
-
-export function eventTypeAllowsAttachment(eventType: RunEventType): boolean {
-  return eventType === "model.completed"
-    || eventType === "tool.completed"
-    || eventType === "operation.completed"
-    || eventType === "operation.prepared"
-    || eventType === "clarification.required";
 }

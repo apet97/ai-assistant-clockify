@@ -4,7 +4,6 @@ import {
   TERMINAL_RUN_PHASES,
   computeRequestHash,
   createEmptyRunBudget,
-  hostCallsCommitted,
   isTerminalPhase,
   totalChargedTokens,
   type RunPhase,
@@ -68,8 +67,8 @@ describe("RunBudget helpers", () => {
     expect(totalChargedTokens(budget)).toBe(18);
   });
 
-  it("computes committed host calls as used plus reserved", () => {
-    const budget = { ...createEmptyRunBudget(), hostCallsUsed: 4, hostCallsReserved: 6 };
-    expect(hostCallsCommitted(budget)).toBe(10);
-  });
+  // C9: `hostCallsCommitted` is deleted — it had no production caller. The
+  // used+reserved sum that matters is computed where it is enforced: in TS at
+  // budgets.ts (canReserveHostCalls) and in SQL at store.ts:967-968,:1008-1009,
+  // which is the authority for the durable 60-call ledger.
 });

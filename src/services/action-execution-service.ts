@@ -41,7 +41,7 @@ function denyCode(reason: LoadedToolValidationFailure | "duplicate_tool_call_id"
 
 /** F11: order-insensitive canonical form — reordered keys collide, genuinely
  * distinct arguments do not. */
-export function canonicalArgumentsKey(value: unknown): string {
+function canonicalArgumentsKey(value: unknown): string {
   const canonical = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(canonical);
     if (v && typeof v === "object") {

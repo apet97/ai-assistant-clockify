@@ -44,13 +44,17 @@ export type PresentedResultStatus = (typeof PRESENTED_RESULT_STATUSES)[number];
 export const PRESENTED_RESULT_MAX_FACTS = PUBLIC_FACT_LIMIT;
 export const PRESENTED_RESULT_MAX_WARNINGS = 12;
 export const PRESENTED_RESULT_MAX_REFERENCES = 12;
-export const PRESENTED_RESULT_TITLE_MAX_CHARS = 512;
-export const PRESENTED_RESULT_SUMMARY_MAX_CHARS = 4_096;
-export const PRESENTED_RESULT_FACT_LABEL_MAX_CHARS = 256;
-export const PRESENTED_RESULT_FACT_VALUE_MAX_CHARS = 2_048;
-export const PRESENTED_RESULT_WARNING_MAX_CHARS = 256;
-export const PRESENTED_RESULT_STRING_ID_MAX_CHARS = 256;
-export const PRESENTED_RESULT_DISPLAY_NAME_MAX_CHARS = 512;
+// C9: module-private. These seven bound the envelope schema below and had
+// no consumer outside this file; exporting them advertised a contract
+// nothing depended on. PRESENTED_RESULT_MAX_FACTS stays exported — it IS
+// imported (presentation/presenter-registry.ts).
+const PRESENTED_RESULT_TITLE_MAX_CHARS = 512;
+const PRESENTED_RESULT_SUMMARY_MAX_CHARS = 4_096;
+const PRESENTED_RESULT_FACT_LABEL_MAX_CHARS = 256;
+const PRESENTED_RESULT_FACT_VALUE_MAX_CHARS = 2_048;
+const PRESENTED_RESULT_WARNING_MAX_CHARS = 256;
+const PRESENTED_RESULT_STRING_ID_MAX_CHARS = 256;
+const PRESENTED_RESULT_DISPLAY_NAME_MAX_CHARS = 512;
 /** DiagnosticView reuses the model-facing tool-result byte budget — the
  * diagnostic value is the same sanitized canonical receipt shape, so it needs
  * no separate bound. */

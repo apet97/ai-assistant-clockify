@@ -1,15 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   V2_LIMITS,
-  canReserveApiCall,
   canReserveDiscoveryCall,
   canReserveHostCalls,
   canReserveModelCall,
   chargeFailedModelAttempt,
   chargeSuccessfulModelAttempt,
-  incrementApiCallsUsed,
-  incrementDiscoveryCallsUsed,
-  incrementModelCallsUsed,
   isActiveWallBudgetExceeded,
   isTokenBudgetExceeded,
   preflightModelRequest,
@@ -56,11 +52,15 @@ describe("resolveHostCallCeiling (plan B1: eval-only NARROWING override)", () =>
 });
 
 describe("counter ceilings", () => {
+  // C9: the charge is an inline budget spread in production (runner.ts,
+  // run-service.ts, run-events.ts:436) — the `increment*` helpers these loops
+  // used to call had no production caller and are deleted. Incrementing the
+  // same way production does keeps the ceiling assertion honest.
   it("allows exactly six model calls and rejects the seventh", () => {
     let budget = createEmptyRunBudget();
     for (let i = 0; i < 6; i += 1) {
       expect(canReserveModelCall(budget)).toBe(true);
-      budget = incrementModelCallsUsed(budget);
+      budget = { ...budget, modelCallsUsed: budget.modelCallsUsed + 1 };
     }
     expect(canReserveModelCall(budget)).toBe(false);
     expect(budget.modelCallsUsed).toBe(6);
@@ -70,19 +70,18 @@ describe("counter ceilings", () => {
     let budget = createEmptyRunBudget();
     for (let i = 0; i < 2; i += 1) {
       expect(canReserveDiscoveryCall(budget)).toBe(true);
-      budget = incrementDiscoveryCallsUsed(budget);
+      budget = { ...budget, discoveryCallsUsed: budget.discoveryCallsUsed + 1 };
     }
     expect(canReserveDiscoveryCall(budget)).toBe(false);
   });
 
-  it("allows exactly twelve API calls and rejects the thirteenth", () => {
-    let budget = createEmptyRunBudget();
-    for (let i = 0; i < 12; i += 1) {
-      expect(canReserveApiCall(budget)).toBe(true);
-      budget = incrementApiCallsUsed(budget);
-    }
-    expect(canReserveApiCall(budget)).toBe(false);
-  });
+  // The twelve-API-call ceiling is NOT asserted here any more: its predicate
+  // `canReserveApiCall` was dead (superseded by the batch admission at
+  // action-execution-service.ts:266, per the F17 comment at :263-265), so a
+  // unit assertion over it proved nothing about production. The real ceiling is
+  // pinned end to end against the app/store composition by
+  // tests/integration/v2-runtime-limits.test.ts:121 (`apiCallsUsed` === 12 with
+  // exactly one `budget_exhausted` denial on the 13th call).
 
   it("enforces host-call used + reserved <= 60", () => {
     let budget = createEmptyRunBudget();

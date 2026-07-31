@@ -14,7 +14,7 @@ import type { AssistantRunScope } from "../db/store/runs.js";
 import type { PreparedAssistantWriteInput } from "../db/store/assistant-write-preparation.js";
 import { executeV2ApiAction, validateV2RawActionArguments } from "../harness/actions.js";
 import type { ActionContext, ActionDefinition, ConfirmableOperation } from "../harness/action.js";
-import { MODEL_API_ACTION_CATALOG, type ActionRegistry } from "../harness/api-catalog.js";
+import type { ActionRegistry } from "../harness/api-catalog.js";
 import { actionFingerprintForDefinition } from "../harness/catalog.js";
 import { createPendingConfirmation } from "../harness/confirmations.js";
 import { exactNonsecretJson } from "../harness/safe-json.js";
@@ -489,4 +489,4 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
   };
 }
 
-export const defaultOperationPreparationRegistry = MODEL_API_ACTION_CATALOG;
+
