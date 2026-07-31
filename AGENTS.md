@@ -132,8 +132,9 @@ deployment, browser, or human evidence. Deploy only from `DEPLOYMENT.md`.
   handoff and exact-SHA all-gates aggregation. Do not treat its current artifacts
   as release evidence.
 - Remaining order: fix the post-M evidence handoff, complete C/D work, then run a
-  candidate-bound release. Live write/cleanup, deployment/browser proof, soak,
-  independent sign-off, and Marketplace access remain external/technical gates.
+  candidate-bound release. Live write/cleanup, deployment/browser proof, the
+  [7-day soak](./docs/V2_SOAK_SPEC.md), independent sign-off, and Marketplace
+  access remain external/technical gates.
 - M1–M7 now grade the real runner: 120 add-on-loadable cases × three cohorts ×
   three repeats = 1,080 attempts; per case the floors are canonical 3/3,
   paraphrase at least 2/3, typo at least 2/3; unrelated destructive calls and

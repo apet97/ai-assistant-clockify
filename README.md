@@ -30,7 +30,7 @@ During coexistence, v1 accepts only critical safety, production, and verified Cl
 | **v2 engine, source on `main`** | The 2026-07-28 adversarial-review closure plan (F01–F24) is code-complete: reads, clarifications, previews, confirm/cancel/expiry, batches, replay, reload, budgets, audit/telemetry, privacy logging | closure commit series through `c9a04f1`; per-PR suites under `tests/` |
 | **v2 in the browser** | Full journey list passes on Chromium, Firefox, and WebKit against the tsc-built production composition (real SQLite, real signed-JWT auth, no hand-authored frames) | `npm run test:e2e:real` (15 journeys × 3 engines) |
 | **v2 deployed on Railway** | Serves the closure candidate `ad06c08` on the ADR-compliant fresh database `/data/ai-assistant-v2.sqlite` (schema 13); `/version` exact-matches, `/live` `/health` `/manifest` 200. A fresh database has no installation until an owner reinstalls in the Clockify console | [`docs/V2_CUTOVER_RECORD.md`](./docs/V2_CUTOVER_RECORD.md) |
-| **Release evidence** | NOT READY — credentialed model evals, `live:v2-full`, soak, and independent sign-off remain | [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md) |
+| **Release evidence** | NOT READY — credentialed model evals, `live:v2-full`, the [7-day soak](./docs/V2_SOAK_SPEC.md), and independent sign-off remain | [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md) |
 
 The interface and workspace-data criterion is: **English interface; Unicode workspace
 data; timezone-aware Intl formatting**.

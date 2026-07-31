@@ -76,8 +76,8 @@ inventory instead of copying hashes into prose.
   not consume the three v2 eval artifacts into one all-gates exact-SHA conclusion.
 - Remaining sequence: repair the post-M evidence handoff, complete C/D work, then
   run a candidate-bound release. The live v2 write/cleanup, exact-candidate
-  deployment/browser proof, soak, independent security/recovery sign-off, and
-  Marketplace access remain external/technical gates.
+  deployment/browser proof, the [7-day soak](./docs/V2_SOAK_SPEC.md), independent
+  security/recovery sign-off, and Marketplace access remain external/technical gates.
 - `scripts/live-full.ts` is read/preview/sweep diagnostic only. It constructs a
   bare `ActionContext`, so its writes correctly fail `mutation_scope_required`;
   its write columns are not evidence. **`live:v2-full` is the sole v2 live-write

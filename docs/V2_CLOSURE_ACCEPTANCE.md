@@ -36,7 +36,7 @@ built UI bundle (`npm run test:e2e:real`), with no hand-authored frames.
 | History/control | **local PASS** | `v2-restore-control-source.test.ts` (one v2 control source, rotate-once-per-page); browser: stale-nonce re-arm via the run-event page; history switcher restores without live controls |
 | Audit/metrics | **local PASS** | `v2-audit-telemetry.test.ts` (one bounded audit row per settled action; one invocation-telemetry record from the persisted budget) |
 | Browser | **local PASS** | `npm run test:e2e:real`: 15 journeys × Chromium/Firefox/WebKit = 45/45 against the tsc-built real Express/SQLite path; fixture suite relabeled renderer/contract (120/120 × 3) |
-| Release | **OPEN GATES** | exact protected remote SHA + branch protection, fresh v2 credentialed model evidence (`LLM_*`), live sacrificial gates (`live:v2-full`), ADR-compliant database boundary (owner F24 decision; planner+boot enforcement is in place), backup/restore on the candidate, Operation 11B, soak, sign-off |
+| Release | **OPEN GATES** | exact protected remote SHA + branch protection, fresh v2 credentialed model evidence (`LLM_*`), live sacrificial gates (`live:v2-full`), ADR-compliant database boundary (owner F24 decision; planner+boot enforcement is in place), backup/restore on the candidate, Operation 11B, the [7-day soak](./V2_SOAK_SPEC.md), sign-off |
 
 Scanner note closure: `gitleaks git` over full history reports no leaks with
 the narrowly scoped policy in `.gitleaks.toml`; adversarial proof — planting a

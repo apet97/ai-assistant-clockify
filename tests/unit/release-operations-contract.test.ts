@@ -1,6 +1,14 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { RETENTION_PRUNE_FAILURE_THRESHOLD } from "../../src/retention-alerts.js";
+import {
+  SUSTAINED_HOST_CONSECUTIVE_THRESHOLD,
+  SUSTAINED_HOST_WINDOW_MS,
+  SUSTAINED_HOST_WINDOW_THRESHOLD,
+} from "../../src/clockify/host-throttle-monitor.js";
+import { TOKEN_REJECTION_SUSPECT_THRESHOLD } from "../../src/clockify/token-rejection-monitor.js";
+import { OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS } from "../../src/operator-health.js";
 
 const read = (path: string): string => readFileSync(resolve(path), "utf8");
 
@@ -525,5 +533,545 @@ describe("v1 rollback runbook scope", () => {
     // The v2 path may be NAMED by the scope banner; it must never be EXECUTED here.
     expect(runbook).not.toMatch(/-- \/data\/ai-assistant-v2\.sqlite/u);
     expect(runbook).not.toContain('SELECTED_DATABASE_PATH="/data/ai-assistant-v2.sqlite"');
+  });
+});
+
+/**
+ * D6: four documents REQUIRED a production soak and none DEFINED one, so "soak"
+ * was an unfalsifiable gate — anyone could declare it passed. `docs/V2_SOAK_SPEC.md`
+ * defines it. These assertions exist so the definition cannot rot away from the
+ * two things it is derived from:
+ *
+ *  - its watch list is not prose. Every match string must stay SET-EQUAL to
+ *    `DEPLOYMENT.md`'s "Required alerts" table, and every threshold it quotes
+ *    must equal the exported constant, so renaming an event or retuning a
+ *    monitor fails here as well as in `required-alerts-contract.test.ts`; and
+ *  - the owner-decided window and rollback deadline are double-entry literals
+ *    carried by the four requiring documents, the same coupling convention
+ *    `scripts/evidence/cold-verify-evidence.ts` uses for the suite floor.
+ *
+ * Every parse below throws or asserts a nonzero count first: a silently empty
+ * table parse or a doc that lost its soak sentence must FAIL, never pass.
+ */
+describe("v2 soak specification", () => {
+  const SPEC_PATH = "docs/V2_SOAK_SPEC.md";
+  const SPEC = read(SPEC_PATH);
+  const DEPLOY = read("DEPLOYMENT.md");
+
+  /** The four documents that require a soak and must point at the one that defines it. */
+  const REQUIRING_DOCS = [
+    "CLAUDE.md",
+    "MARKETPLACE_READINESS.md",
+    "README.md",
+    "docs/V2_CLOSURE_ACCEPTANCE.md",
+  ];
+
+  const section = (source: string, heading: string, label: string): string => {
+    const found = new RegExp(`\\n${heading}\\n([\\s\\S]*?)\\n## `, "u").exec(source);
+    if (!found) throw new Error(`${label}: no section "${heading}"`);
+    return found[1]!;
+  };
+
+  const backticked = (cell: string): string[] =>
+    [...cell.matchAll(/`([^`]+)`/gu)].map((match) => match[1]!);
+
+  /** Row number -> the backticked strings in the THIRD cell of a 5-column table. */
+  const matchStringsByRow = (body: string): Map<number, string[]> => {
+    const rows = new Map<number, string[]>();
+    for (const line of body.split("\n")) {
+      const cells = /^\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|$/u.exec(line);
+      if (!cells) continue;
+      const number = Number(cells[1]!.trim());
+      if (!Number.isInteger(number)) continue; // header / separator row
+      rows.set(number, backticked(cells[3]!));
+    }
+    return rows;
+  };
+
+  /**
+   * Same shape as `required-alerts-contract.test.ts`: absent means throw, never
+   * 0. Unlike that helper this collects EVERY occurrence, because the spec
+   * states each threshold twice — once in the watch-list cell and once in the
+   * pinned list. A first-match-only read let a drift in the second site hide
+   * behind the first, which is exactly the vacuity this test exists to avoid.
+   */
+  const documented = (name: string): number => {
+    const found = [...SPEC.matchAll(new RegExp(`\`${name}\`\\s*=\\s*([\\d_]+)`, "gu"))].map(
+      (match) => Number(match[1]!.replace(/_/gu, "")),
+    );
+    if (found.length === 0) throw new Error(`${SPEC_PATH} never states \`${name}\` = <number>`);
+    for (const value of found) {
+      if (value === found[0]) continue;
+      throw new Error(`${SPEC_PATH} states conflicting \`${name}\` values: ${found.join(", ")}`);
+    }
+    return found[0]!;
+  };
+
+  /**
+   * Collect EVERY occurrence of a quantity across several permitted phrasings
+   * and require them all to agree.
+   *
+   * An earlier version used `.exec()` for the rollback deadline and swept only
+   * the six alert constants, so mutating the deadline at its second or third
+   * mention left the suite green — the exact first-match vacuity this file's
+   * own comments warn about. Nothing here may use `.exec()` for a quantity.
+   */
+  const sweep = (patterns: readonly RegExp[], label: string): number => {
+    const flat = SPEC.replace(/\s+/gu, " ");
+    const values = patterns.flatMap((pattern) =>
+      [...flat.matchAll(pattern)].map((match) => Number(match[1]!)),
+    );
+    if (values.length === 0) throw new Error(`${SPEC_PATH} never states ${label}`);
+    for (const value of values) {
+      if (value === values[0]) continue;
+      throw new Error(`${SPEC_PATH} states conflicting ${label}: ${values.join(", ")}`);
+    }
+    return values[0]!;
+  };
+
+  /**
+   * A bare `SPEC.slice(indexOf(a), indexOf(b))` returns a long, non-empty string
+   * when either anchor is MISSING (-1 slices from the end / to the end), so a
+   * renamed heading silently keeps every `toContain` below passing against the
+   * wrong region. Both anchors must be found.
+   */
+  const slice = (from: string, to: string): string => {
+    const start = SPEC.indexOf(from);
+    const end = SPEC.indexOf(to);
+    expect(start, `${SPEC_PATH} has the heading "${from}"`).toBeGreaterThanOrEqual(0);
+    expect(end, `${SPEC_PATH} has the heading "${to}"`).toBeGreaterThan(start);
+    return SPEC.slice(start, end);
+  };
+
+  /**
+   * The spec's §10 states these as CLOSED rules: every hour/day quantity is one
+   * of the listed forms. `CONSTRAINED_*` must all equal the owner's value;
+   * `FREE_*` are the deliberately unconstrained rejected alternatives (and, for
+   * days, a system retention period that is not this document's number). The
+   * completeness check strips both sets and requires nothing to remain, so a
+   * NEW phrasing cannot slip past the sweep by not matching any pattern.
+   */
+  const CONSTRAINED_HOURS = [/within (\d+) hours/giu, /(\d+)-hour deadline/giu] as const;
+  const FREE_HOURS = [/(\d+)-hour option/giu] as const;
+  const CONSTRAINED_DAYS = [
+    /(\d+) consecutive days/giu,
+    /(\d+) days/giu,
+    /(\d+)-day (?:soak|clock|window)/giu,
+  ] as const;
+  const FREE_DAYS = [/(\d+)-day option/giu, /(\d+)-day retention/giu] as const;
+
+  const SOAK_DAYS = sweep(CONSTRAINED_DAYS, "the soak window in days");
+  const ROLLBACK_HOURS = sweep(CONSTRAINED_HOURS, "the rollback deadline in hours");
+
+  const markdownFiles = (): string[] => {
+    const skip = /(^|\/)(node_modules|dist|coverage|\.git|test-results|playwright-report)(\/|$)/u;
+    return readdirSync(".", { recursive: true, encoding: "utf8" })
+      .map((entry) => entry.replace(/\\/gu, "/"))
+      .filter((entry) => entry.endsWith(".md") && !skip.test(entry));
+  };
+
+  it("records the owner's decided window and rollback deadline, consistently throughout", () => {
+    // The two owner decisions. `sweep` already required every occurrence of each
+    // to agree, so these fix the agreed value.
+    expect(SOAK_DAYS).toBe(7);
+    expect(ROLLBACK_HOURS).toBe(24);
+
+    // Both quantities must be restated, or "all occurrences agree" is a claim
+    // about one occurrence.
+    const count = (patterns: readonly RegExp[]): number =>
+      patterns.reduce((total, p) => total + [...SPEC.replace(/\s+/gu, " ").matchAll(p)].length, 0);
+    expect(count(CONSTRAINED_HOURS), "the deadline is restated").toBeGreaterThanOrEqual(4);
+    expect(count(CONSTRAINED_DAYS), "the window is restated").toBeGreaterThanOrEqual(4);
+
+    // `7 × 24 h` is the form the pass/fail condition and the artifact both use.
+    const arithmetic = [...SPEC.matchAll(/(\d+) × 24 h/gu)];
+    expect(arithmetic.length, "the spec states the window arithmetic").toBeGreaterThan(0);
+    for (const match of arithmetic) expect(Number(match[1]!)).toBe(SOAK_DAYS);
+
+    // Completeness: strip every form §10 permits and require NOTHING to remain.
+    // Without this a new phrasing ("a 48 hour deadline", "the rollback day")
+    // would silently sit outside every sweep above.
+    const strip = (patterns: readonly RegExp[]) => (text: string): string =>
+      patterns.reduce((acc, p) => acc.replace(new RegExp(p.source, "giu"), " "), text);
+    const residual = strip([...CONSTRAINED_HOURS, ...FREE_HOURS, ...CONSTRAINED_DAYS, ...FREE_DAYS])(
+      SPEC.replace(/\s+/gu, " "),
+    );
+    expect(residual, "an hour quantity outside the forms §10 permits").not.toMatch(
+      /\d+[- ]hours?\b/u,
+    );
+    expect(residual, "a day quantity outside the forms §10 permits").not.toMatch(/\d+[- ]days?\b/u);
+    // ...and §10 must actually state those rules, so the doc explains its own
+    // constraint rather than the constraint living only in this file.
+    expect(SPEC.replace(/\s+/gu, " ")).toContain("every hour quantity is `within <N> hours`");
+    expect(SPEC.replace(/\s+/gu, " ")).toContain("every day quantity is `<N> consecutive days`");
+
+    // Both endpoints must be observable, not adjectival: a rollback is complete
+    // only when the deployed engine reports v1, never when a variable was flipped.
+    expect(SPEC).toContain('`modelConfiguration.assistantEngine` equal to `"v1"`');
+    expect(SPEC).toContain("timestamp of the FIRST log line");
+    // ...and the two criteria that emit NO line must have their own defined
+    // start instants, or the deadline is undefined for 2 of the 13.
+    expect(SPEC).toContain("Criterion 6 (heartbeat ABSENCE)");
+    expect(SPEC).toContain("Criterion 13 (admin-reported data-integrity incident)");
+    expect(SPEC).toContain("timestamp of the admin's report as received");
+  });
+
+  it("makes all four requiring documents point at the spec, carrying its window literal", () => {
+    for (const path of REQUIRING_DOCS) {
+      const doc = read(path);
+      // Guard first: if the soak sentence is deleted, this must FAIL rather than
+      // vacuously pass the link checks below.
+      const soakMentions = [...doc.matchAll(/soak/giu)];
+      expect(soakMentions.length, `${path} still requires a soak`).toBeGreaterThan(0);
+
+      // The link target differs per document (root docs use `./docs/…`, docs/
+      // documents use `./…`), so pin the basename and then RESOLVE the written
+      // path relative to the document's own directory.
+      const links = [...doc.matchAll(/\]\((\.[^)]*V2_SOAK_SPEC\.md)\)/gu)];
+      expect(links.length, `${path} links the soak spec`).toBeGreaterThan(0);
+      for (const link of links) {
+        const target = resolve(join(dirname(resolve(path)), link[1]!));
+        expect(existsSync(target), `${path} link ${link[1]!} resolves`).toBe(true);
+        expect(target).toBe(resolve(SPEC_PATH));
+      }
+
+      // Double-entry literal, the convention `cold-verify-evidence.ts` uses: the
+      // window is carried at the reference site, so a spec that silently changes
+      // its window leaves four documents contradicting it and this test red.
+      expect(doc, `${path} carries the soak window`).toContain(`${SOAK_DAYS}-day soak`);
+      // ...and the literal must sit inside the link text, not somewhere else in
+      // the file, or the coupling is decorative.
+      expect(doc, `${path} couples the window to the link`).toMatch(
+        new RegExp(`\\[${SOAK_DAYS}-day soak\\]\\(\\.[^)]*V2_SOAK_SPEC\\.md\\)`, "u"),
+      );
+    }
+  });
+
+  it("lets no other document state a different soak window or deadline", () => {
+    const files = markdownFiles();
+    // A zero-length sweep would pass everything.
+    expect(files.length).toBeGreaterThan(10);
+    expect(files).toContain(SPEC_PATH);
+    for (const file of files) {
+      for (const match of read(file).matchAll(/(\d+)[- ]day soak/giu)) {
+        expect(Number(match[1]!), `${file} states a soak window`).toBe(SOAK_DAYS);
+      }
+    }
+    // The deadline is carried by the spec alone — no reference site restates it,
+    // deliberately, because stuffing a second literal into four documents to pin
+    // a value that lives in one place is worse than pinning it internally. This
+    // is the guard for a future copy: a no-op today, red the moment one of the
+    // requiring documents or the retirement gate states a conflicting number.
+    for (const file of [...REQUIRING_DOCS, "docs/V1_RETIREMENT_SEQUENCE.md"]) {
+      for (const match of read(file).replace(/\s+/gu, " ").matchAll(/rollback[^.]{0,120}?within (\d+) hours/giu)) {
+        expect(Number(match[1]!), `${file} states a rollback deadline`).toBe(ROLLBACK_HOURS);
+      }
+    }
+  });
+
+  it("keeps the watch list set-equal to DEPLOYMENT.md's required-alert table", () => {
+    const deployRows = matchStringsByRow(section(DEPLOY, "## Required alerts", "DEPLOYMENT.md"));
+    const specRows = matchStringsByRow(section(SPEC, "## 5\\. The watch list", SPEC_PATH));
+
+    // Neither parse may be silently empty, and the spec must cover EVERY alert
+    // row — an alert row 11 added later fails here until the soak watches it.
+    expect(deployRows.size, "DEPLOYMENT.md alert rows parsed").toBeGreaterThanOrEqual(10);
+    expect([...specRows.keys()].sort((a, b) => a - b)).toEqual(
+      [...deployRows.keys()].sort((a, b) => a - b),
+    );
+
+    for (const [row, expectedMatches] of deployRows) {
+      expect(expectedMatches.length, `DEPLOYMENT.md row ${row} match strings`).toBeGreaterThan(0);
+      // Set equality, not containment: an extra invented string in the watch
+      // list is as wrong as a missing one — an operator would configure an alert
+      // that can never fire and read its silence as health.
+      expect(
+        [...(specRows.get(row) ?? [])].sort(),
+        `soak watch row ${row} match strings`,
+      ).toEqual([...expectedMatches].sort());
+    }
+  });
+
+  it("quotes every numeric threshold from the exported constant, not from prose", () => {
+    expect(documented("RETENTION_PRUNE_FAILURE_THRESHOLD")).toBe(RETENTION_PRUNE_FAILURE_THRESHOLD);
+    expect(documented("SUSTAINED_HOST_WINDOW_THRESHOLD")).toBe(SUSTAINED_HOST_WINDOW_THRESHOLD);
+    expect(documented("SUSTAINED_HOST_WINDOW_MS")).toBe(SUSTAINED_HOST_WINDOW_MS);
+    expect(documented("SUSTAINED_HOST_CONSECUTIVE_THRESHOLD")).toBe(
+      SUSTAINED_HOST_CONSECUTIVE_THRESHOLD,
+    );
+    expect(documented("OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS")).toBe(
+      OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS,
+    );
+    // Two values the runbook does NOT state in its own `NAME` = <number> form:
+    // row 9 says "once per streak" and row 10 says "every 15 minutes" in words.
+    // The spec is therefore their only document, and it says so — pin BOTH the
+    // claim and its premise, so the sentence cannot quietly become false if the
+    // runbook later grows a constants bullet for either.
+    expect(documented("TOKEN_REJECTION_SUSPECT_THRESHOLD")).toBe(TOKEN_REJECTION_SUSPECT_THRESHOLD);
+    expect(SPEC.replace(/\s+/gu, " ")).toContain(
+      "Two of those six are values `DEPLOYMENT.md` does NOT state",
+    );
+    for (const name of ["TOKEN_REJECTION_SUSPECT_THRESHOLD", "OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS"]) {
+      expect(DEPLOY, `DEPLOYMENT.md still does not pin ${name}`).not.toMatch(
+        new RegExp(`\`${name}\`\\s*=`, "u"),
+      );
+      expect(SPEC, `the spec names ${name} as its own`).toContain(name);
+    }
+    // ...and the four the runbook DOES pin must stay pinned there, or the split
+    // this sentence describes has moved and the spec is describing a stale one.
+    for (const name of [
+      "RETENTION_PRUNE_FAILURE_THRESHOLD",
+      "SUSTAINED_HOST_WINDOW_THRESHOLD",
+      "SUSTAINED_HOST_WINDOW_MS",
+      "SUSTAINED_HOST_CONSECUTIVE_THRESHOLD",
+    ]) expect(DEPLOY, `DEPLOYMENT.md still pins ${name}`).toMatch(new RegExp(`\`${name}\`\\s*=`, "u"));
+  });
+
+  it("never treats a missing drain-recovery line as a signal (it cannot exist)", () => {
+    // The defect this pins: `ready_recovered` CANNOT follow a drain, so any
+    // criterion phrased as "a drain that does not recover" fires on every
+    // routine deploy and starts the v1-rollback clock. Pin the CODE that makes
+    // it structural, then pin that the spec never phrases it that way.
+    const readiness = readFileSync(resolve("src/readiness-alerts.ts"), "utf8");
+    // `ready()` is silent unless THIS process already opened a cause...
+    expect(readiness).toMatch(/ready\(\)\s*\{\s*\n\s*if \(openCause === undefined\) return;/u);
+    // ...and the monitor's state is per-instance, not module-level.
+    expect(readiness).toContain("let openCause: ReadinessFailureCause | undefined;");
+    const server = read("src/server.ts");
+    // Exactly one monitor per process, and the drain path never calls ready().
+    expect(server.match(/createReadinessAlertMonitor\(/gu)).toHaveLength(1);
+    expect(server).toContain('readinessAlerts.notReady("draining")');
+    expect(server).toMatch(/readiness\.ready = false;/u);
+    expect(server).not.toMatch(/readiness\.ready = true;/u);
+
+    const normalized = SPEC.replace(/\s+/gu, " ");
+    // The spec must state the limit...
+    expect(normalized).toContain("cannot cross a process boundary");
+    expect(normalized).toContain("a `cause=draining` line is NEVER followed by");
+    // ...and must NOT contain the criterion shape that would fire on deploys.
+    expect(normalized, "a drain must never be required to emit a recovery line").not.toMatch(
+      /`cause=draining` that is not followed by/u,
+    );
+    expect(normalized, "row 1 must not abort on a drain that never recovers").not.toMatch(
+      /draining cause that never recovers/u,
+    );
+    // Criterion 11 must exclude draining explicitly and carry a bound, so it is
+    // neither the deploy-firing shape nor an open-ended one.
+    expect(normalized).toContain(
+      "**A `cause=draining` line is explicitly NOT this criterion**",
+    );
+    // Criterion 11 must carry an explicit bound. (The alternation an earlier
+    // draft used here made the left branch match "criterion 11" alone, so the
+    // assertion proved nothing — a single-branch pattern is the whole point.)
+    expect(normalized).toContain(
+      "within one `OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS`. That bound is this spec's choice",
+    );
+    // §7.2's deploy case must be reachable: resolution read from /health.
+    expect(normalized).toContain("where `/health` answers `200` again once the replacement");
+  });
+
+  it("commits the deadline to a rollback path that can actually execute", () => {
+    const normalized = SPEC.replace(/\s+/gu, " ");
+    // The runbook's own banner says the literal read-through does not execute;
+    // the spec must name that, not present it as the path.
+    const banner = read("docs/marketplace/03-operations-evidence-rollback-package.md");
+    expect(banner).toContain("**This page is not an executable v1 rollback either.**");
+    expect(banner).toContain("planSignedFullV1Rollback");
+    expect(normalized).toContain("**This page is not an executable v1 rollback either.**");
+    expect(normalized).toContain("throws before any Railway mutation");
+    // The real path exists in code and is named, with ADR 003's extra step.
+    const cutover = read("scripts/cutover-transaction.ts");
+    expect(cutover).toContain("export function planSignedFullV1Rollback(");
+    expect(cutover).toContain("clearsStaleInstallation: true");
+    expect(normalized).toContain("**`planSignedFullV1Rollback`**");
+    expect(normalized).toContain("`clearsStaleInstallation`");
+    // The blocking prerequisite must be stated, and must still BE blocking.
+    expect(existsSync(resolve("docs/marketplace/03-operations-v2-runbook.md"))).toBe(false);
+    expect(normalized).toContain("**D9 must land before the soak clock starts**");
+
+    // Entry-gate item 3 must not claim the deploy transaction's own UNDO proves
+    // v1 reachability. Those two names are pinned to the SERVING tree, which
+    // during a v2 soak is v2.
+    const gate = slice("## 2. Entry gate", "## 3. Duration").replace(/\s+/gu, " ");
+    expect(gate).toContain("This is NOT the `ROLLBACK_RELEASE_SHA`");
+    expect(gate).toContain("can never name v1");
+    expect(gate).toContain("this item cannot be satisfied and the soak may not start");
+    expect(DEPLOY).toContain('test "$ROLLBACK_RELEASE_SHA" = "$SERVING_RELEASE_SHA"');
+  });
+
+  it("says which lines cannot be attributed to a workspace", () => {
+    // Four row-10 criteria and the headline row-5 criterion are the load-bearing
+    // ones, and neither line reliably carries a workspace. An operator planning
+    // per-workspace triage on them would be planning something impossible.
+    const outcome = read("src/log-outcome-unknown.ts");
+    expect(outcome).toContain("`workspace=` is absent at seams with no reachable session");
+    expect(outcome).toContain("it carries no workspace alias");
+    expect(DEPLOY).toContain("Row 10 goes further and carries NO workspace dimension at all");
+    const normalized = SPEC.replace(/\s+/gu, " ");
+    expect(normalized).toContain("cannot always name a workspace");
+    expect(normalized).toContain("not** an operator lookup key");
+    // ...and the artifact must not demand one anyway.
+    expect(normalized).toContain("an invented attribution is worse than \"not attributable\"");
+  });
+
+  it("carries the watch list's documented blind spots rather than reading as complete", () => {
+    // Each of these limits is recorded in DEPLOYMENT.md or in src; a soak that
+    // does not carry them is a soak whose clean result is over-read.
+    for (const limit of [
+      "Row 3's streak is per process",
+      "Row 6 counts only ANSWERED responses",
+      "Row 6 needs volume",
+      "Row 6's latches are per process",
+      "pinned by SOURCE only",
+      "The force-exit path is silent",
+      "Row 10's LEVEL fields are instantaneous",
+      "Row 10's windows do not tile",
+      "Row 10's first line after a restart is distorted",
+      "Nothing asserts at BOOT that the timers were created",
+      "OWNER VERIFICATION REQUIRED",
+      "cannot cross a process boundary",
+      "cannot always name a workspace",
+    ]) expect(SPEC, `the spec carries the limit: ${limit}`).toContain(limit);
+
+    // Attribution: §6 claims three limits are NOT in the runbook. That claim is
+    // itself checkable, and it was WRONG once — the un-asserted timer creation
+    // IS stated in DEPLOYMENT.md. Pin both directions.
+    for (const absent of ["force-exit", "ready_recovered` cannot cross"]) {
+      expect(DEPLOY, `DEPLOYMENT.md still does not cover: ${absent}`).not.toContain(absent);
+    }
+    expect(DEPLOY, "DEPLOYMENT.md still states the timer limit").toContain(
+      "Nothing asserts at BOOT that `start()` made",
+    );
+    expect(SPEC.replace(/\s+/gu, " "), "the spec attributes the timer limit correctly").toContain(
+      "Every other bullet, including the un-asserted timer creation, is stated in the runbook",
+    );
+
+    // The force-exit limit is a claim about real code, so pin the code: the
+    // timer's callback must still be the bare `finish(1)` with no log call.
+    const server = read("src/server.ts");
+    expect(server).toMatch(/setTimeout\(\(\) => finish\(1\), deps\.forceExitAfterMs/u);
+    const forceLine = server.split("\n").find((line) => line.includes("=> finish(1)"))!;
+    expect(forceLine).not.toContain("log(");
+  });
+
+  it("states abort criteria as counted, observable conditions the artifact must answer", () => {
+    const immediate = slice("### 7.1 IMMEDIATE ABORT", "### 7.2 INVESTIGATE");
+    const investigate = slice("### 7.2 INVESTIGATE", "## 8.");
+    const count = (body: string): number => body.split("\n").filter((l) => /^\d+\. /u.test(l)).length;
+    const immediateCount = count(immediate);
+    const investigateCount = count(investigate);
+    expect(immediateCount).toBeGreaterThan(0);
+    expect(investigateCount).toBeGreaterThan(0);
+
+    // The declaration artifact must require one verdict per criterion. Stating
+    // the counts in two places on purpose: adding a criterion without widening
+    // the artifact would let a soak be declared with a criterion unanswered.
+    const declared = /§7\.1 criterion \((\d+) entries\) and per §7\.2 criterion \((\d+) entries\)/u
+      .exec(SPEC.replace(/\s+/gu, " "));
+    expect(declared, "the artifact states how many verdicts it requires").not.toBeNull();
+    expect(Number(declared![1]!)).toBe(immediateCount);
+    expect(Number(declared![2]!)).toBe(investigateCount);
+
+    // The headline criterion the task exists for: this string appearing AT ALL.
+    expect(immediate).toContain("`[write-outcome] event=outcome_unknown` appears at all");
+  });
+
+  it("agrees with the v1 retirement sequence's entry gate in both directions", () => {
+    const retirement = read("docs/V1_RETIREMENT_SEQUENCE.md");
+    // The gate is what consumes this spec, so the reference must survive.
+    expect(retirement).toContain("docs/V2_SOAK_SPEC.md");
+
+    // Its three demands on the declaration artifact, each answered by the spec.
+    for (const [demand, answer] of [
+      ["named inputs", "named inputs"],
+      ["watch-list results", "watchListResults"],
+      ['"no rollback required"', '**"no rollback required"**'],
+    ] as const) {
+      expect(retirement, `the gate still demands ${demand}`).toContain(demand);
+      expect(SPEC, `the spec supplies ${demand}`).toContain(answer);
+    }
+
+    // Gate item 3 binds the window to ONE deployed candidate; the spec turns that
+    // into an executable rule instead of leaving it to interpretation.
+    expect(retirement).toContain("full soak window on the exact retirement");
+    expect(SPEC).toContain("restarts the 7-day\nclock at zero");
+    expect(SPEC).toContain("deploymentLedger");
+
+    // The spec QUOTES that gate. A quote is only a quote while the source still
+    // says it — inserting anything mid-phrase (a link, a clause) would leave the
+    // spec misquoting the document it cites, which is how this first broke.
+    const quoted = /requires that production served v2 "([^"]+)"/u.exec(SPEC.replace(/\s+/gu, " "));
+    expect(quoted, "the spec quotes the retirement gate").not.toBeNull();
+    expect(
+      retirement.replace(/\s+/gu, " "),
+      "the retirement gate still contains the quoted phrase verbatim",
+    ).toContain(quoted![1]!);
+
+    // The interlock: gate item 2 rewrites DEPLOYMENT.md's v1-rollback block, and
+    // doing that during the soak would delete the procedure the 24-hour deadline
+    // commits to. The spec must forbid it explicitly, or the two documents
+    // contradict each other the first time an operator reads them in order.
+    expect(SPEC).toContain("may not execute before or during the soak");
+    expect(DEPLOY).toContain("ONLY for a v1 deploy or a v1 rollback");
+
+    // The retirement document contradicts ITSELF about where that rewrite sits:
+    // entry-gate item 2 says "BEFORE step 1 below", while step 1 IS the rewrite.
+    // The spec must not paper over that by asserting one reading as fact. Pin
+    // both halves of the contradiction so this stays flagged until the
+    // retirement document's owner resolves it — and pin that the spec flags it
+    // rather than restating either half as the ordering.
+    expect(retirement).toContain("must be rewritten BEFORE step 1 below, not after");
+    expect(retirement).toMatch(/### 1\. Rewrite `DEPLOYMENT\.md`'s rollback block/u);
+    const normalized = SPEC.replace(/\s+/gu, " ");
+    expect(normalized).toContain("the retirement document is internally inconsistent");
+    expect(normalized).toContain("This spec takes no position on that internal ordering");
+    expect(normalized, "the spec must not assert the disputed ordering as fact").not.toContain(
+      "The retirement sequence orders the rewrite as its step 1",
+    );
+  });
+
+  it("names the declaration artifact's inputs in the existing evidence convention", () => {
+    const artifact = slice("## 9. The declaration artifact", "## 10. Anchors");
+    for (const field of [
+      "candidateSha",
+      "deployIdentity",
+      "windowStart",
+      "windowEnd",
+      "deploymentLedger",
+      "watchListResults",
+      "heartbeatObserved",
+      "abortCriteriaVerdict",
+      "logPlaneAccess",
+      "knownBlindSpots",
+      "rollback",
+      "conclusion",
+    ]) expect(artifact, `the artifact names ${field}`).toContain(field);
+
+    // It must bind deploy identity through the validator that already exists...
+    expect(artifact).toContain("verifyDeployedV2Engine");
+    expect(existsSync(resolve("scripts/evidence/v2-deployed-engine.ts"))).toBe(true);
+    // ...and must NOT invent a builder. If one is ever written it is a v2
+    // sibling; the v1 validators are rollback evidence and stay untouched.
+    expect(artifact).toContain("No builder script exists for this artifact");
+    expect(artifact).toContain("scripts/evidence/v2-*.ts");
+    const invented = [...artifact.matchAll(/npm run ([a-z0-9:-]+)/gu)].map((m) => m[1]!);
+    const scripts = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+    for (const name of invented) expect(Object.keys(scripts.scripts)).toContain(name);
+  });
+
+  it("keeps its entry gate stated by content, not by a plan label that does not exist", () => {
+    // Same class as the `CF-1` lesson: `E5` is a label in an out-of-repo executor
+    // plan. The gate must be checkable from this repository alone.
+    const gate = slice("## 2. Entry gate", "## 3. Duration");
+    expect(gate).toContain("verifyDeployedV2Engine");
+    expect(gate).toContain('`"v2"`');
+    expect(gate).toContain("deploy:private-production");
+    expect(gate).toContain("that label exists");
+    for (const probe of ["/live", "/health", "/manifest"]) expect(gate).toContain(probe);
+    // Every npm script the gate names must be real.
+    const scripts = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+    for (const match of gate.matchAll(/npm run ([a-z0-9:-]+)/gu)) {
+      expect(Object.keys(scripts.scripts)).toContain(match[1]!);
+    }
   });
 });

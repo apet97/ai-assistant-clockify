@@ -17,7 +17,10 @@ this commit, not copied from a plan.
    rollback is still possible. Retiring v1 makes it an incident landmine of exactly
    the D1 class, so it must be rewritten BEFORE step 1 below, not after.
 3. **Production has served v2 for the full soak window on the exact retirement
-   candidate**, with the deployed SHA named in the record.
+   candidate**, with the deployed SHA named in the record. The window, its abort
+   criteria, and its declaration artifact are specified in the
+   [7-day soak](./V2_SOAK_SPEC.md) spec; this gate owns only the requirement that it
+   passed on THIS candidate.
 
 > **Step 8 forfeits rollback.** Once the flag collapses there is no supported path
 > back to the v1 engine without a revert-and-redeploy. Treat step 8 as a one-way

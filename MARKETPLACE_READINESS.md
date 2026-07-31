@@ -12,8 +12,9 @@ and all remote checks green — recorded in
 
 The v2 candidate is still **not releasable**: the owner reinstall that creates
 the fresh installation/attestation, fresh credentialed model evidence,
-`live:v2-full`, soak, and independent human security/recovery sign-off all remain
-open. No historical artifact below establishes a v2 conclusion. The locally provable rows of the review's release
+`live:v2-full`, the [7-day soak](./docs/V2_SOAK_SPEC.md), and independent human
+security/recovery sign-off all remain open. No historical artifact below
+establishes a v2 conclusion. The locally provable rows of the review's release
 acceptance matrix, with per-row evidence, are recorded in
 [`docs/V2_CLOSURE_ACCEPTANCE.md`](./docs/V2_CLOSURE_ACCEPTANCE.md).
 
