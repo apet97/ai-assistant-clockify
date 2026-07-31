@@ -26,3 +26,12 @@ plans/
 # Firecrawl local scrape cache
 .firecrawl/
 dist-e2e/
+
+# Playwright run state and reports. Both configs leave outputDir at its default,
+# so `test:e2e` and `test:e2e:real` both write the repo-root test-results/ —
+# `.last-run.json` every run, plus trace/screenshot folders on a failure
+# (trace: "retain-on-failure"). It only ever looked clean because the last run
+# passed and the file byte-matched HEAD; a failing run dirtied the tree and could
+# smuggle run state into a release commit.
+test-results/
+playwright-report/
