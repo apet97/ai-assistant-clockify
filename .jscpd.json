@@ -8,5 +8,5 @@
   "gitignore": true,
   "format": ["typescript"],
   "pattern": "src/**/*.ts",
-  "ignore": ["**/*.test.ts", "**/*.d.ts", "tests/**", "dist/**", "vendor/**", "node_modules/**", "scripts/**"]
+  "ignore": ["**/*.generated.ts", "**/*.test.ts", "**/*.d.ts", "tests/**", "dist/**", "vendor/**", "node_modules/**", "scripts/**"]
 }
