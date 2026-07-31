@@ -4,12 +4,19 @@ import express, { type Express } from "express";
 import { buildAddon, ADDON_ICON_SVG, ICON_PATH } from "./addon/manifest.js";
 import { createSignatureParser } from "./addon/verify.js";
 import { loadConfig } from "./config.js";
-import { createStore, type Installation } from "./db/store.js";
+import { createStore, type Installation, type Store } from "./db/store.js";
 import type { WorkspaceClient } from "./clockify/client.js";
-import { createRestWorkspaceClient } from "./clockify/rest-workspace.js";
+import { createRestWorkspaceClient, type RestWorkspaceOptions } from "./clockify/rest-workspace.js";
 import { createWorkspaceRequestGovernor, type WorkspaceRequestGovernor } from "./clockify/request-governor.js";
 import { createTokenRejectionMonitor, type TokenRejectionMonitor } from "./clockify/token-rejection-monitor.js";
+import { createHostThrottleMonitor, type HostThrottleMonitor } from "./clockify/host-throttle-monitor.js";
 import { logAlias } from "./log-alias.js";
+import {
+  classifySqliteFailure,
+  createReadinessAlertMonitor,
+  logSqliteUnavailable,
+} from "./readiness-alerts.js";
+import { createRetentionAlertMonitor, type RetentionAlertMonitor } from "./retention-alerts.js";
 import { createWorkspaceMutationCoordinator } from "./clockify/workspace-mutation-coordinator.js";
 import {
   resolveClockifyApiBase,
@@ -133,14 +140,32 @@ export function createApp(
   // Readiness probe (the platform healthcheck). Unlike the static /manifest, this
   // touches the DB handle, so a hung/locked SQLite instance reports 503 and gets
   // rotated out instead of silently failing live traffic. Public, no auth, no secrets.
+  //
+  // D3 alerts 1 and 4: a 503 used to be completely silent, so a container could
+  // be rotated out again and again — for a read-only or full volume — with no
+  // evidence anywhere. Both the readiness state change and the classified
+  // storage cause are now emitted, at the CROSSING only: the platform polls this
+  // route on a seconds-scale interval, so per-probe lines would flood the log
+  // exactly when it needs to be readable. Draining is separated from a store
+  // failure structurally rather than by re-reading a sentinel message.
+  const readinessAlerts = createReadinessAlertMonitor();
   app.get("/health", (_req, res) => {
-    try {
-      if (deps.readiness && !deps.readiness.isReady()) throw new Error("draining");
-      deps.store.healthCheck();
-      res.json({ ok: true });
-    } catch {
+    if (deps.readiness && !deps.readiness.isReady()) {
+      readinessAlerts.notReady("draining");
       res.status(503).json({ ok: false });
+      return;
     }
+    try {
+      deps.store.healthCheck();
+    } catch (error) {
+      const kind = classifySqliteFailure(error);
+      const changed = readinessAlerts.notReady(kind ? `sqlite_${kind}` : "storage_error");
+      if (changed && kind) logSqliteUnavailable({ kind, site: "readiness" });
+      res.status(503).json({ ok: false });
+      return;
+    }
+    readinessAlerts.ready();
+    res.json({ ok: true });
   });
 
   // The add-on icon (manifest `iconPath`) — Clockify's sidebar nav entry renders
@@ -173,6 +198,13 @@ export function createApp(
   // emit a terminal error line instead of trying to set a status on sent headers.
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error("request error:", err instanceof Error ? err.message : String(err));
+    // D3 alert 4: the prose line above is not alertable — a SQLITE_BUSY, a 413,
+    // and any other route rejection all produce the identical prefix. Classify
+    // the storage failures the runbook names and emit the CLASSIFICATION beside
+    // it, so an operator can alert on a locked/full/read-only volume without
+    // pattern-matching driver text.
+    const sqliteFailure = classifySqliteFailure(err);
+    if (sqliteFailure) logSqliteUnavailable({ kind: sqliteFailure, site: "request" });
     if (res.headersSent) {
       finishNdjsonWithServerError(res);
       return;
@@ -193,39 +225,104 @@ export function createApp(
   return app;
 }
 
+export interface LiveClockifyFactoryDeps {
+  commitTimeoutMs?: number;
+  requestGovernorFor: (workspaceId: string) => WorkspaceRequestGovernor;
+  /**
+   * REQUIRED, both of them. These carry the ONLY production wiring for two
+   * documented alerts (`DEPLOYMENT.md` rows 6 and 9), and `start()` is not
+   * reachable from a test, so an optional monitor could be dropped at the call
+   * site with a green suite — an alert that can never fire. The type refuses
+   * that instead, and the composition below is covered by injecting
+   * `createClient`.
+   */
+  tokenRejectionMonitor: TokenRejectionMonitor;
+  hostThrottleMonitor: HostThrottleMonitor;
+  /** Injectable adapter constructor so the wiring is testable without a host. */
+  createClient?: (options: RestWorkspaceOptions) => WorkspaceClient;
+}
+
 /**
- * Default production Clockify client: the REST adapter over the WorkspaceClient
- * port, authenticated with the installation's add-on token (X-Addon-Token). The
- * base URL is resolved from the install context (apiUrl/backendUrl + /v1) so dev
- * and regional environments work — see resolveClockifyApiBase. No token is logged.
+ * Default production Clockify client factory: the REST adapter over the
+ * WorkspaceClient port, authenticated with the installation's add-on token
+ * (X-Addon-Token). The base URL is resolved from the install context
+ * (apiUrl/backendUrl + /v1) so dev and regional environments work — see
+ * resolveClockifyApiBase. No token is logged.
  */
-function liveClockifyForWorkspace(
-  installation: Installation,
-  commitTimeoutMs?: number,
-  requestGovernor?: WorkspaceRequestGovernor,
-  signal?: AbortSignal,
-  tokenRejectionMonitor?: TokenRejectionMonitor,
-): WorkspaceClient {
-  return createRestWorkspaceClient({
+export function createLiveClockifyFactory(
+  deps: LiveClockifyFactoryDeps,
+): (installation: Installation, options?: { signal?: AbortSignal }) => WorkspaceClient {
+  const createClient = deps.createClient ?? createRestWorkspaceClient;
+  return (installation, options) => createClient({
     baseUrl: resolveClockifyApiBase(installation),
     reportsBase: resolveClockifyReportsBase(installation),
     auditBase: resolveClockifyAuditBase(installation),
     workspaceId: installation.workspaceId,
     auth: { addonToken: installation.addonToken },
-    commitTimeoutMs,
-    requestGovernor,
-    ...(signal ? { signal } : {}),
-    ...(tokenRejectionMonitor
-      ? {
-          onAuthRejected: () => tokenRejectionMonitor.rejected(installation.workspaceId),
-          onAuthAccepted: () => tokenRejectionMonitor.accepted(installation.workspaceId),
-        }
-      : {}),
+    commitTimeoutMs: deps.commitTimeoutMs,
+    requestGovernor: deps.requestGovernorFor(installation.workspaceId),
+    ...(options?.signal ? { signal: options.signal } : {}),
+    onAuthRejected: () => deps.tokenRejectionMonitor.rejected(installation.workspaceId),
+    onAuthAccepted: () => deps.tokenRejectionMonitor.accepted(installation.workspaceId),
+    onHostThrottled: (status: number) => deps.hostThrottleMonitor.throttled(installation.workspaceId, status),
+    onHostHealthy: () => deps.hostThrottleMonitor.healthy(installation.workspaceId),
   });
 }
 
 /** Operational-table retention sweep cadence (see Store.pruneExpired). */
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
+export interface RetentionPruneLoopDeps {
+  store: Pick<Store, "pruneExpired">;
+  /**
+   * REQUIRED for the same reason as the client factory's monitors: this is the
+   * only production wiring for `DEPLOYMENT.md` alert row 3, and `start()` is
+   * not reachable from a test, so an optional monitor could be silently dropped.
+   */
+  alerts: RetentionAlertMonitor;
+  /** The informational sweep record. Injectable so a test can read it. */
+  log?: (line: string) => void;
+  /** Injectable so a test drives the backlog continuation deterministically. */
+  scheduleContinuation?: (run: () => void) => void;
+}
+
+/**
+ * Retention: prune expired operational rows + chat transcripts/audit log past
+ * the retention window at startup (catches backlog after long-idle deploys) and
+ * hourly. chat_messages/audit_events age out on RETENTION_DAYS (default 90).
+ *
+ * D3 alert 3: the sweep logged a line per failure with no counter anywhere, so
+ * nothing distinguished one transient lock from a sweep that had not completed
+ * in a day, and a backlog was only ever a field inside a prose line. Extracted
+ * from `start()` so that wiring is provable — inside `start()` it was not.
+ */
+export function createRetentionPruneLoop(deps: RetentionPruneLoopDeps): () => Promise<void> {
+  const log = deps.log ?? ((line: string) => console.log(line));
+  const schedule = deps.scheduleContinuation ?? ((run: () => void) => { setImmediate(run); });
+  let pruning = false;
+  const prune = async (): Promise<void> => {
+    if (pruning) return;
+    pruning = true;
+    let continueBacklog = false;
+    try {
+      const counts = await deps.store.pruneExpired(new Date().toISOString());
+      continueBacklog = counts.backlog;
+      deps.alerts.swept({ backlog: counts.backlog, batches: counts.batches });
+      if (counts.total > 0 || counts.backlog) {
+        log(
+          `retention prune: total=${counts.total} deleted=${counts.deletedTotal} expired=${counts.expiredTotal} batches=${counts.batches} durationMs=${counts.durationMs} backlog=${counts.backlog} confirmationsDeleted=${counts.pendingConfirmations} confirmationsExpired=${counts.expiredConfirmations} idempotency=${counts.idempotencyKeys} undoDeleted=${counts.undoRecords} undoExpired=${counts.expiredUndoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents} operations=${counts.operationRuns} results=${counts.actionResults} artifacts=${counts.artifacts} sessions=${counts.chatSessions} walBusy=${counts.walCheckpoint.busy} walLog=${counts.walCheckpoint.log} walCheckpointed=${counts.walCheckpoint.checkpointed}`,
+        );
+      }
+    } catch (error) {
+      deps.alerts.failed();
+      console.warn("retention prune failed:", error instanceof Error ? error.message : String(error));
+    } finally {
+      pruning = false;
+      if (continueBacklog) schedule(() => { void prune(); });
+    }
+  };
+  return prune;
+}
 
 /** Drain budget before force-exit — Railway SIGKILLs shortly after SIGTERM. */
 const FORCE_EXIT_AFTER_MS = 10_000;
@@ -329,6 +426,12 @@ export async function start(): Promise<void> {
   const tokenRejectionMonitor = createTokenRejectionMonitor({
     aliasFor: (workspaceId) => logAlias(config.sessionSecret, "workspace", workspaceId),
   });
+  // D3 alert 6: a sustained run of Clockify 429/5xx answers is an operator
+  // signal, not a per-request one — the streak resets on the first healthy
+  // response, so only a real storm alerts.
+  const hostThrottleMonitor = createHostThrottleMonitor({
+    aliasFor: (workspaceId) => logAlias(config.sessionSecret, "workspace", workspaceId),
+  });
   const requestGovernors = new Map<string, WorkspaceRequestGovernor>();
   const requestGovernorFor = (workspaceId: string): WorkspaceRequestGovernor => {
     const existing = requestGovernors.get(workspaceId);
@@ -344,16 +447,16 @@ export async function start(): Promise<void> {
   // Store construction has already marked dispatched orphans unknown. Complete
   // the read-only reconciliation pass before any listener can accept mutation
   // traffic. The pass can neither resume a prepared step nor compensate.
+  const clockifyForWorkspace = createLiveClockifyFactory({
+    commitTimeoutMs: config.commitTimeoutMs,
+    requestGovernorFor,
+    tokenRejectionMonitor,
+    hostThrottleMonitor,
+  });
   try {
     await runProductionStartupReconciliation({
       store,
-      clockifyForWorkspace: (installation) => liveClockifyForWorkspace(
-        installation,
-        config.commitTimeoutMs,
-        requestGovernorFor(installation.workspaceId),
-        undefined,
-        tokenRejectionMonitor,
-      ),
+      clockifyForWorkspace: (installation) => clockifyForWorkspace(installation),
     });
   } catch (error) {
     store.close();
@@ -365,40 +468,12 @@ export async function start(): Promise<void> {
     parser,
     modelClient,
     apiOperationIndex: buildApiOperationIndex(MODEL_API_ACTION_CATALOG),
-    clockifyForWorkspace: (installation, options) => liveClockifyForWorkspace(
-      installation,
-      config.commitTimeoutMs,
-      requestGovernorFor(installation.workspaceId),
-      options?.signal,
-      tokenRejectionMonitor,
-    ),
+    clockifyForWorkspace,
     readiness: { isReady: () => readiness.ready },
     ...(releaseArtifactIdentity ? { releaseArtifactIdentity } : {}),
   });
 
-  // Retention: prune expired operational rows + chat transcripts/audit log past
-  // the retention window at startup (catches backlog after long-idle deploys) and
-  // hourly. chat_messages/audit_events age out on RETENTION_DAYS (default 90).
-  let pruning = false;
-  const prune = async (): Promise<void> => {
-    if (pruning) return;
-    pruning = true;
-    let continueBacklog = false;
-    try {
-      const counts = await store.pruneExpired(new Date().toISOString());
-      continueBacklog = counts.backlog;
-      if (counts.total > 0 || counts.backlog) {
-        console.log(
-          `retention prune: total=${counts.total} deleted=${counts.deletedTotal} expired=${counts.expiredTotal} batches=${counts.batches} durationMs=${counts.durationMs} backlog=${counts.backlog} confirmationsDeleted=${counts.pendingConfirmations} confirmationsExpired=${counts.expiredConfirmations} idempotency=${counts.idempotencyKeys} undoDeleted=${counts.undoRecords} undoExpired=${counts.expiredUndoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents} operations=${counts.operationRuns} results=${counts.actionResults} artifacts=${counts.artifacts} sessions=${counts.chatSessions} walBusy=${counts.walCheckpoint.busy} walLog=${counts.walCheckpoint.log} walCheckpointed=${counts.walCheckpoint.checkpointed}`,
-        );
-      }
-    } catch (error) {
-      console.warn("retention prune failed:", error instanceof Error ? error.message : String(error));
-    } finally {
-      pruning = false;
-      if (continueBacklog) setImmediate(() => { void prune(); });
-    }
-  };
+  const prune = createRetentionPruneLoop({ store, alerts: createRetentionAlertMonitor() });
   const pruneTimer = setInterval(() => { void prune(); }, PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 

@@ -1347,10 +1347,90 @@ readiness conclusion.
 
 ## Required alerts
 
-Alert on readiness `503`, fatal/draining exits, retention backlog or repeated prune
-failure, SQLite `BUSY`/`FULL`/read-only errors, operation `outcome_unknown`, sustained
-Clockify `429`/5xx responses, model-provider failures, and artifact oversize rejects.
-Do not include prompts, headers, tool results, or tokens in alert payloads.
+Configure one log-match alert per row. The **match string** is the exact substring to
+grep or alert on. Every one is pinned against the emitter it names by
+`tests/unit/required-alerts-contract.test.ts`, so renaming an event or retagging a
+subsystem fails that suite instead of silently leaving a configured alert that can never
+fire. Do not include prompts, headers, tool results, or tokens in alert payloads.
+
+Exactly what that pin proves, so it is not read as more than it is:
+
+- For every documented match string EXCEPT the three named next, the test RUNS the
+  emitter and asserts the produced line contains that string. This is per string, not
+  per row: row 2's fourth string (`received — draining`) is invoked like the rest.
+- Three of row 2's four strings — `unhandledRejection:`, `uncaughtException:` and
+  `startup failed:` — are literal arguments to `console.error` inside
+  `process.once(...)` handlers and the module-scope `start().catch`. A test cannot
+  install those without hijacking the runner's own fatal handling, so they are pinned by
+  SOURCE: the string must appear on a line that also calls `console`. That proves the
+  string is emitted code rather than prose; it does not prove the handler runs.
+- Separately, `tests/unit/alert-production-wiring.test.ts` proves the production
+  composition actually reaches the emitters for rows 3, 6 and 9, and
+  `tests/integration/alert-log-privacy.test.ts` does the same for rows 1, 4 and 8 by
+  driving real routes and the real store. The remaining wiring assurance is structural:
+  the monitors are REQUIRED constructor fields, so dropping one at the `start()` call
+  site is a compile error. Nothing asserts at BOOT that `start()` made those calls at
+  all, so a wholesale removal of a factory call — or passing a monitor that does
+  nothing — would still be silent; `start()` is not reachable from a test.
+
+| # | Condition | Match string | Emitter | Firing rule |
+|---|---|---|---|---|
+| 1 | Readiness probe failing (`503`) | `[readiness] event=not_ready` | `src/readiness-alerts.ts` | Once per cause, not per probe. The condition stays OPEN until `[readiness] event=ready_recovered`; absence of new lines is not recovery. `cause=draining` is the expected deploy case. |
+| 2 | Fatal or draining exit | `received — draining`, `unhandledRejection:`, `uncaughtException:`, `startup failed:` | `src/server.ts` | Every occurrence. The draining separator is U+2014 EM DASH — a hyphen never matches. |
+| 3 | Retention backlog, or repeated prune failure | `[retention] event=prune_backlog_started`, `[retention] event=prune_failing_repeatedly` | `src/retention-alerts.ts` | Once per crossing. A backlog stays OPEN until `[retention] event=prune_backlog_cleared`. The failure streak resets on the next successful sweep — and ALSO on restart, see the limit below. |
+| 4 | SQLite `BUSY`/`FULL`/read-only | `[storage] event=sqlite_unavailable` | `src/readiness-alerts.ts` | Every occurrence on the request path (`site=request`); once per readiness crossing (`site=readiness`), since the platform polls `/health`. `kind=` is the classified driver code, never a message. |
+| 5 | Operation `outcome_unknown` | `[write-outcome] event=outcome_unknown` | `src/log-outcome-unknown.ts` | Every settlement. The same substring also catches the restart-recovery aggregate `[write-outcome] event=outcome_unknown_recovered`. |
+| 6 | Sustained Clockify `429`/5xx | `[clockify-host] event=host_throttled_sustained` | `src/clockify/host-throttle-monitor.ts` | Two triggers, per workspace, distinguished by `trigger=`. `trigger=window` is the sustained-rate one: N failures inside a rolling window, which successes do NOT clear — this is what catches a partial (e.g. 50% 5xx) degradation. `trigger=consecutive` is a fast-trip for a total outage. Each fires once and re-arms only after SUSTAINED health — an empty rolling window. One healthy response zeroes the consecutive COUNTER but does NOT re-arm the alert, deliberately: without that latch a partial outage re-fires every time four failures happen to land in a row (~4,000 lines/hour at 200 req/min). |
+| 7 | Model-provider failure | `provider_http_error status=` | `src/assistant/model-client.ts` | Every non-2xx. A ` retry=1` suffix marks the attempt that will be retried once, so a retried failure emits twice. |
+| 8 | Artifact oversize reject | `[storage] event=artifact_oversize_rejected` | `src/log-artifact-oversize.ts` | Every occurrence. In production expect only `site=download`: all three caps are the same 1,000,000 bytes, so the adapter's bounded binary GET always refuses first. `site=export` (alternate non-REST client) and `site=persist` (a caller bypassing the harness guard) are defence in depth — either one appearing means something upstream is not what it is assumed to be. `bytes=` is absent only when the adapter cancelled the body mid-stream and holds a lower bound rather than a measurement. |
+| 9 | Repeated installation-token rejection | `[install-authority] event=token_rejected_suspect` | `src/clockify/token-rejection-monitor.ts` | Once per streak, per workspace; resets on an accepted response. Authority is never changed from a wire signal — retiring the row is a deliberate operator act. |
+
+Row 9 is not in the original eight. It is the one alert the codebase already emitted and
+the runbook never documented; leaving it undocumented would have meant an operator could
+not see an installation whose token Clockify has started refusing.
+
+"Repeated" and "sustained" are numbers, not adjectives, and every constant below is
+asserted against this file by the contract test above:
+
+- `RETENTION_PRUNE_FAILURE_THRESHOLD` = 3 consecutive failed sweeps. The sweep runs
+  hourly, and a single failure is routinely a transient lock contending with a live
+  turn, so this is ~3 hours of no retention progress — far inside the retention window
+  it protects, well past any transient.
+- `SUSTAINED_HOST_WINDOW_THRESHOLD` = 12 failures inside
+  `SUSTAINED_HOST_WINDOW_MS` = 60_000 ms, per workspace, however many successes fall
+  between them. This is the trigger that makes "sustained" true: a streak that any
+  success resets can never fire on a partial outage, which is the ordinary degradation
+  shape. Twelve is four times one request's maximum retry chain (3), so at least four
+  DISTINCT failing requests are needed and no single flaky call can reach it; against
+  the governor's 10 req/s ceiling (~600 requests/minute) it is ~2% of throughput.
+- `SUSTAINED_HOST_CONSECUTIVE_THRESHOLD` = 4 consecutive `429`/5xx responses — a
+  fast-trip for a total outage, which would otherwise have to wait for the window to
+  fill. Derived, not chosen: one GET produces at most `1 + MAX_GET_RETRIES` = 3
+  throttled observations, so a single blip that exhausts its own retry budget can never
+  fire it.
+
+Known limits, so neither row is trusted past what it does:
+
+- Row 6 counts only ANSWERED responses. A Clockify outage that refuses the connection
+  or fails DNS produces no status at all, so it generates zero observations and this
+  alert stays silent; rows 5 and 7 and the ordinary error path are what surface that.
+- Row 6 needs volume. A workspace with very low traffic AND only partial degradation may
+  never accumulate 12 failures inside 60 s, while its successes keep the fast-trip from
+  firing. That case is undetected here.
+- Row 6's state is per process and per workspace, held in memory; a restart clears both
+  latches, so the next outage after a restart alerts again.
+- Row 3's streak is also per process, and the sweep runs hourly. A container that
+  restarts more often than about two hours can therefore NEVER reach three consecutive
+  failures, so `prune_failing_repeatedly` will not fire for a persistently broken prune
+  on a crash-looping instance. That specific scenario — a full or read-only volume — is
+  covered instead by rows 1 and 4, which fire on the first occurrence and do not depend
+  on an accumulated count.
+
+No alert line carries a raw workspace, admin, or entity id, a token, or admin-authored
+text. Where a session secret is in scope the workspace appears as an HMAC alias
+(`workspace=ws-…`, `src/log-alias.ts`); where none is, the field is omitted rather than
+threaded in. `tests/integration/alert-log-privacy.test.ts` drives hostile values through
+these paths and asserts on identifier SHAPES, not just literals.
 
 ## Final handoff - exactly three admin-only packages
 

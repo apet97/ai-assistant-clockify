@@ -533,6 +533,40 @@ describe("rest core host routing + auth", () => {
     await expect(bad.getBinary("api", "/x")).rejects.toThrow(/500/);
   });
 
+  it("getBinary reports the size it KNEW when refusing an oversize body", async () => {
+    // D3 alert 8 prints `bytes=` from this error. Two of the three caps know the
+    // real length — a declared Content-Length and a fully-buffered body — and
+    // only the streaming cap has a mere lower bound. Dropping the size at the
+    // Content-Length cap would omit it on the likeliest production path.
+    const declaredTooLarge = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: (async () => new Response("x", {
+        status: 200,
+        headers: { "content-type": "application/pdf", "content-length": "4200000" },
+      })) as unknown as typeof fetch,
+    });
+    await expect(declaredTooLarge.getBinary("api", "/x", 1_000)).rejects.toMatchObject({
+      name: "BinaryResponseTooLargeError",
+      maxBytes: 1_000,
+      observedBytes: 4_200_000,
+    });
+
+    // The streaming cap cancels mid-body, so it must NOT invent a size.
+    const streamedTooLarge = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: (async () => new Response(new Uint8Array(4_000), {
+        status: 200,
+        headers: { "content-type": "application/pdf" },
+      })) as unknown as typeof fetch,
+    });
+    await expect(streamedTooLarge.getBinary("api", "/x", 1_000)).rejects.toMatchObject({
+      name: "BinaryResponseTooLargeError",
+      observedBytes: undefined,
+    });
+  });
+
   it("getBinary maps the add-on token's 401 'API is not accessible' to the named restriction (parity with call)", async () => {
     const core = createRestCore({
       apiBase: "https://api.clockify.me/api/v1",

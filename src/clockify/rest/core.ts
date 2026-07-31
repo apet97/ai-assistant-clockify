@@ -71,6 +71,14 @@ export interface RestCoreOptions {
    */
   onAuthRejected?: () => void;
   onAuthAccepted?: () => void;
+  /**
+   * Observation seam for sustained host throttling (D3 alert 6).
+   * `onHostThrottled` fires on every 429 or 5xx response, `onHostHealthy` on
+   * every other answered response. Purely observational: neither hook may
+   * change the response, the retry decision, or the governor cooldown.
+   */
+  onHostThrottled?: (status: number) => void;
+  onHostHealthy?: () => void;
 }
 
 export interface MutationPlanScopeStep {
@@ -145,7 +153,14 @@ export class MutationDispatchDenied extends Error {
 export class BinaryResponseTooLargeError extends Error {
   readonly code = "artifact_too_large";
 
-  constructor(readonly path: string, readonly maxBytes: number) {
+  /**
+   * The real size where this cap knew it: the declared `Content-Length`, or the
+   * fully-buffered length. It is UNDEFINED only for the streaming cap, which
+   * cancels mid-body and therefore knows the response is over the limit but not
+   * by how much. The D3 oversize alert reports it when present rather than
+   * omitting a size it actually had.
+   */
+  constructor(readonly path: string, readonly maxBytes: number, readonly observedBytes?: number) {
     super(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
     this.name = "BinaryResponseTooLargeError";
   }
@@ -398,7 +413,10 @@ export const COMMIT_TIMEOUT_MS = 120_000;
  * total latency stays bounded) — only a RETURNED retryable status on a GET.
  */
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
-const MAX_GET_RETRIES = 2;
+/** Bounded GET retries. Exported because `host-throttle-monitor.ts` DERIVES its
+ *  "sustained" threshold from it — one request can produce `1 + MAX_GET_RETRIES`
+ *  throttled observations, and the alert must need strictly more than that. */
+export const MAX_GET_RETRIES = 2;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 /** Backoff for a retryable GET: honor a sane `Retry-After` (capped 5s), else 300ms→600ms. */
 function retryDelayMs(res: Response, attempt: number): number {
@@ -530,6 +548,17 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     if ("X-Addon-Token" in authHeader) opts.onAuthAccepted?.();
   }
 
+  /**
+   * D3 alert 6: every answered response feeds the sustained-throttling streak.
+   * 429 and 5xx are the two the runbook names; anything else — including a 4xx
+   * — proves the host is answering and resets the streak. Observed here rather
+   * than at the governor because a 5xx never reaches the governor at all.
+   */
+  function observeHostHealth(status: number): void {
+    if (status === 429 || status >= 500) opts.onHostThrottled?.(status);
+    else opts.onHostHealthy?.();
+  }
+
   // Resolve a host base, or fail cleanly when this environment has none (only the
   // audit host can be absent). This prevents fetching a guessed, non-resolving
   // host — the raw "fetch failed" the dev environment used to produce.
@@ -566,6 +595,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     for (let attempt = 0; ; attempt++) {
       res = await doFetch(operation, method, path, url, init);
       if (res.status === 429) opts.requestGovernor?.noteRateLimited(retryDelayMs(res, attempt));
+      observeHostHealth(res.status);
       const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < maxRetries;
       if (!willRetry) break;
       await res.text().catch(() => undefined); // drain the body before retrying
@@ -790,7 +820,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     const declared = Number(res.headers.get("content-length"));
     if (Number.isFinite(declared) && declared > maxBytes) {
       await res.body?.cancel().catch(() => undefined);
-      throw new BinaryResponseTooLargeError(path, maxBytes);
+      throw new BinaryResponseTooLargeError(path, maxBytes, declared);
     }
     let bytes: Uint8Array;
     const reader = res.body?.getReader();
@@ -803,6 +833,8 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
         total += chunk.value.byteLength;
         if (total > maxBytes) {
           await reader.cancel().catch(() => undefined);
+          // No observed size: the body is cancelled here, so `total` is only a
+          // lower bound, not the artifact's real length.
           throw new BinaryResponseTooLargeError(path, maxBytes);
         }
         chunks.push(chunk.value);
@@ -816,7 +848,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     } else {
       bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.byteLength > maxBytes) {
-        throw new BinaryResponseTooLargeError(path, maxBytes);
+        throw new BinaryResponseTooLargeError(path, maxBytes, bytes.byteLength);
       }
     }
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };

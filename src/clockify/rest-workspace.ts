@@ -34,7 +34,7 @@ import { makeWorkspaceRest } from "./rest/workspace.js";
 export type { ClockifyAuth };
 
 export interface RestWorkspaceOptions
-  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs" | "requestGovernor" | "signal" | "onAuthRejected" | "onAuthAccepted"> {
+  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs" | "requestGovernor" | "signal" | "onAuthRejected" | "onAuthAccepted" | "onHostThrottled" | "onHostHealthy"> {
   baseUrl: string; // e.g. https://api.clockify.me/api/v1
   workspaceId: string;
   /** Unit/integration adapter probes only. Production always leaves this true. */
@@ -57,6 +57,8 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     signal: opts.signal,
     onAuthRejected: opts.onAuthRejected,
     onAuthAccepted: opts.onAuthAccepted,
+    onHostThrottled: opts.onHostThrottled,
+    onHostHealthy: opts.onHostHealthy,
     enforceMutationScope: process.env.NODE_ENV === "test"
       ? (opts.testOnlyEnforceMutationScope ?? true)
       : true,

@@ -40,6 +40,7 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { BinaryResponseTooLargeError } from "../../clockify/rest/core.js";
+import { logArtifactOversizeRejected } from "../../log-artifact-oversize.js";
 import type {
   ApiAccess,
   ApiActionMetadataCarrier,
@@ -657,7 +658,17 @@ const exportInvoice = defineInvoiceRead({
     try {
       exp = await ctx.clockify.exportInvoice(id, args.format as "PDF" | undefined);
     } catch (error) {
-      if (error instanceof BinaryResponseTooLargeError) return artifactTooLargeReceipt();
+      // The adapter cap. It knows the real size when it refused on a declared
+      // Content-Length or a fully-buffered body, and only genuinely lacks it
+      // when it cancelled the stream mid-body — so pass the size through rather
+      // than always dropping it.
+      if (error instanceof BinaryResponseTooLargeError) {
+        return artifactTooLargeReceipt({
+          site: "download",
+          limitBytes: error.maxBytes,
+          ...(error.observedBytes === undefined ? {} : { bytes: error.observedBytes }),
+        });
+      }
       throw error;
     }
     // Keep binary payloads out of receipts, model transcripts, and audit/result
@@ -665,7 +676,7 @@ const exportInvoice = defineInvoiceRead({
     // backstops; this guard also covers alternate/test WorkspaceClient ports and
     // returns a stable structured failure before persistence is attempted.
     if (exp.bytes.byteLength > 1_000_000) {
-      return artifactTooLargeReceipt();
+      return artifactTooLargeReceipt({ site: "export", limitBytes: 1_000_000, bytes: exp.bytes.byteLength });
     }
     const normalizedContentType = exp.contentType.split(";", 1)[0]?.trim().toLowerCase();
     const hasPdfSignature =
@@ -718,7 +729,14 @@ function artifactInvalidReceipt(): ReturnType<typeof errorReceipt> {
   });
 }
 
-function artifactTooLargeReceipt(): ReturnType<typeof errorReceipt> {
+function artifactTooLargeReceipt(observed: {
+  site: "download" | "export";
+  limitBytes: number;
+  bytes?: number;
+}): ReturnType<typeof errorReceipt> {
+  // The admin gets a receipt; without this the operator got nothing at all, so a
+  // Clockify-side PDF growth would silently break exports for everyone.
+  logArtifactOversizeRejected(observed);
   return errorReceipt({
     action: "clockify_invoices_export",
     code: "artifact_too_large",

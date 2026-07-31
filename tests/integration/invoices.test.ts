@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
@@ -6,6 +6,14 @@ import { catalogForModel } from "../../src/harness/catalog.js";
 import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { ActionContext } from "../../src/harness/action.js";
 import { BinaryResponseTooLargeError } from "../../src/clockify/rest/core.js";
+
+// Two tests below spy on console.warn to assert the D3 artifact-oversize alert.
+// Without this, that spy stays installed for the rest of the file and silently
+// mutes console.warn for every later test — the exact kind of cross-test leak
+// that hides a regression rather than reporting one.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPolicy()): ActionContext {
@@ -91,6 +99,12 @@ describe("invoice actions", () => {
   });
 
   it("clockify_invoices_export returns artifact_too_large without calling persistence", async () => {
+    // D3 alert 8: the admin's receipt is not an operator signal, so this guard
+    // emits the alert line too. It is NOT the production path — all four caps
+    // are 1,000,000 bytes, so against the real REST adapter `getBinary` always
+    // refuses first (`site=download`). This guard only fires for an alternate
+    // WorkspaceClient, which is exactly what this test injects.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined).mockClear();
     const fake = createFakeWorkspace(seed());
     vi.spyOn(fake.client, "exportInvoice").mockResolvedValue({
       contentType: "application/pdf",
@@ -115,9 +129,13 @@ describe("invoice actions", () => {
       },
     });
     expect(saveArtifact).not.toHaveBeenCalled();
+    expect(warn.mock.calls.map((call) => call.map(String).join(" "))).toEqual([
+      "[storage] event=artifact_oversize_rejected site=export limit=1000000 bytes=1000001",
+    ]);
   });
 
   it("maps the live adapter's cancelled oversize response to artifact_too_large", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined).mockClear();
     const fake = createFakeWorkspace(seed());
     vi.spyOn(fake.client, "exportInvoice").mockRejectedValue(
       new BinaryResponseTooLargeError("/workspaces/ws-1/invoices/inv1/export", 1_000_000),
@@ -137,6 +155,35 @@ describe("invoice actions", () => {
       receipt: { ok: false, code: "artifact_too_large" },
     });
     expect(saveArtifact).not.toHaveBeenCalled();
+    // This construction carries no observed size (the streaming branch cancels
+    // mid-body and only has a lower bound), so `bytes=` is honestly absent.
+    expect(warn.mock.calls.map((call) => call.map(String).join(" "))).toEqual([
+      "[storage] event=artifact_oversize_rejected site=download limit=1000000",
+    ]);
+  });
+
+  it("reports the size the adapter cap DID know (declared Content-Length or full buffer)", async () => {
+    // `site=download` is the only production-reachable oversize guard, and two
+    // of its three throw sites know the real length. Dropping it there would
+    // omit a size we actually had on the likely production path.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined).mockClear();
+    const fake = createFakeWorkspace(seed());
+    vi.spyOn(fake.client, "exportInvoice").mockRejectedValue(
+      new BinaryResponseTooLargeError("/workspaces/ws-1/invoices/inv1/export", 1_000_000, 4_200_000),
+    );
+    const context = makeContext(fake);
+    context.saveArtifact = vi.fn(() => ({ id: "must-not-exist", expiresAt: "2026-06-06T01:00:00.000Z" }));
+
+    const result = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: "inv1" },
+      context,
+    });
+
+    expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "artifact_too_large" } });
+    expect(warn.mock.calls.map((call) => call.map(String).join(" "))).toEqual([
+      "[storage] event=artifact_oversize_rejected site=download limit=1000000 bytes=4200000",
+    ]);
   });
 
   it.each([

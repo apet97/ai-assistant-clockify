@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import { logArtifactOversizeRejected } from "../../log-artifact-oversize.js";
 import type { ArtifactRecord, StoreContext } from "./context.js";
 
 const ARTIFACT_TTL_MS = 60 * 60 * 1000;
+const ARTIFACT_MAX_BYTES = 1_000_000;
 
 export function buildArtifactStore(ctx: StoreContext): {
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
@@ -10,7 +12,16 @@ export function buildArtifactStore(ctx: StoreContext): {
   const { db, now, nowIso } = ctx;
   return {
     createArtifact(input) {
-      if (input.bytes.byteLength > 1_000_000) throw new Error("artifact_too_large");
+      if (input.bytes.byteLength > ARTIFACT_MAX_BYTES) {
+        // The last backstop, and the one an operator most needs to see: reaching
+        // it means the harness guard ahead of it did not fire.
+        logArtifactOversizeRejected({
+          site: "persist",
+          limitBytes: ARTIFACT_MAX_BYTES,
+          bytes: input.bytes.byteLength,
+        });
+        throw new Error("artifact_too_large");
+      }
       const id = randomUUID();
       const createdAt = nowIso();
       const expiresAt = new Date(now().getTime() + ARTIFACT_TTL_MS).toISOString();
