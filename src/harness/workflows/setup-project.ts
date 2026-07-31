@@ -37,10 +37,12 @@ import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
  *
  * It mirrors `clockify_onboard_user` (curated.ts): the `handler` resolves every
  * identity + amount and returns a PREVIEW that lists all changes; the `commit`
- * builds ordered `CompositionStep`s (create → add members → set rates, sharing the
- * created project id via a closure) and runs them via `runComposition`, so a
- * required-step failure reverse-rolls-back (deleting the new project undoes
- * everything) and the whole intent has a single undo handle.
+ * runs the ordered host effects (create → add members → set rates, sharing the
+ * created project id via a closure), each one an exact durable step through
+ * `executeDurableRiskyStep` → `dispatchWithReconciliation`. A required-step
+ * failure after a known effect returns `partial` and RETAINS the created
+ * project (see the recovery hint below) — it does NOT roll back mid-commit;
+ * the whole intent has a single post-hoc undo handle instead.
  *
  * Risk: editing access + billable rates → `["high_risk_write","billing"]` (always
  * previews + confirms). The outer policy gate is `work_structure` (the always-

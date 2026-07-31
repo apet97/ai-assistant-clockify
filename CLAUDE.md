@@ -134,7 +134,11 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
 - **Coverage:** 171 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
-  one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).
+  one preview → one Confirm → one atomic `commit` that journals each host
+  effect through `executeDurableRiskyStep` → `dispatchWithReconciliation`,
+  mirroring `onboard_user`. There is NO mid-commit rollback: a definitive
+  failure after a known effect returns `partial` and RETAINS what succeeded,
+  and reversal is the post-hoc one-use undo (`reverseCreationDurably`)).
 - **Historical v1 model evidence:** the version 1.0.0 release kept DeepSeek V4 Pro
   through the existing OpenAI-compatible HTTP client, native tool mode,
   `LLM_AGENTIC=1`, and `LLM_TOOL_SELECT=1`. The selected 1.0.0 thinking setting
@@ -370,7 +374,7 @@ bug was found against the REAL API, not by reading the code.
   `startup-reconciliation.ts` + `startup-reconciliation-registry.ts` and focused
   workflow registries (read-only executable reconciliation for crash-orphaned
   dispatched steps; never resumes prepared work or compensates),
-  `compose.ts` (legacy atomic multi-step + rollback), `idempotency.ts`
+  `idempotency.ts`
   (workspace/admin/action-scoped semantic confirmed-commit dedupe for
   `clockify_setup_project` and `clockify_setup_task`, with a 10-min window and
   canonical partial replay; invoice replay and duplicate suppression instead use
@@ -667,8 +671,9 @@ bug was found against the REAL API, not by reading the code.
   (a task delete is project-scoped), so `reverseCreationDurably` can delete it; a task
   ref missing its `projectId` can't be reversed and returns an honest
   `undo_failed`, never a silent success (the fake mirrors this — it no longer
-  "deletes" a task without a projectId). `compose.ts` rolls back required-step
-  failures. For the two semantically deduplicated setup actions, the atomic-claim
+  "deletes" a task without a projectId). A composite's required-step failure is
+  reported as `partial` with the succeeded effects retained — never rolled back
+  mid-commit. For the two semantically deduplicated setup actions, the atomic-claim
   ledger is the cross-row serialization point: the claim is taken BEFORE the commit
   await, so two concurrent confirms reach the host at most once. A long multi-call
   commit **heartbeats** its claim (`touchIdempotencyClaim` on `CLAIM_HEARTBEAT_MS`)
