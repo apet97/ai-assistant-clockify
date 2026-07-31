@@ -68,6 +68,7 @@ import {
 import { buildTurnRunStore } from "./store/turn-runs.js";
 import { buildAssistantRunStore } from "./store/runs.js";
 import { buildRunEventStore } from "./store/run-events.js";
+import { buildOperatorHealthStore } from "./store/operator-health.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
 import {
   buildAssistantWritePreparationStore,
@@ -338,6 +339,10 @@ export interface Store {
     since: string;
     limit: number;
   }): import("../metrics/run-metrics.js").RunMetricsEvent[];
+  /** D4: the one FLEET-WIDE aggregate — counts only, no workspace dimension.
+   *  Deliberately unscoped where every other metrics read is per-admin; see
+   *  `src/operator-health.ts` for why it may only ever reach the log plane. */
+  operatorHealthCounts(input: { since: string }): import("../operator-health.js").OperatorHealthCounts;
   getLastRunEventSequence(scope: import("./store/runs.js").AssistantRunScope): number;
   getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
     runId: string;
@@ -1294,6 +1299,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     listRunEventsForMetrics(input: { workspaceId: string; adminUserId: string; since: string; limit: number }) {
       return runEventStore.listEventsForMetrics(input);
     },
+    ...buildOperatorHealthStore(ctx),
     ...buildIntentCapabilityStore(ctx),
     ...buildEntityReferenceStore(ctx),
     ...pendingClarificationStore,

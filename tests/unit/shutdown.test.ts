@@ -84,6 +84,28 @@ describe("createShutdownHandler", () => {
     clearInterval(deps.pruneTimer);
   });
 
+  it("clears BOTH background intervals, so neither can fire against a closed store", async () => {
+    // D4 added a second timer beside the prune sweep. `ShutdownDeps` takes both
+    // as OPTIONAL fields, so dropping either `clearInterval` is not a type
+    // error — this is what makes the loss visible. A snapshot query racing
+    // `store.close()` would throw from a bare interval, and `start()` turns an
+    // uncaught throw into a process exit.
+    const { deps, order } = makeDeps();
+    clearInterval(deps.pruneTimer);
+    let pruned = 0;
+    let snapshots = 0;
+    const pruneTimer = setInterval(() => { pruned += 1; }, 1_000);
+    const snapshotTimer = setInterval(() => { snapshots += 1; }, 1_000);
+    // Non-vacuous: both really were running before the signal.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect([pruned, snapshots]).toEqual([2, 2]);
+
+    createShutdownHandler({ ...deps, pruneTimer, snapshotTimer })("SIGTERM");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(order).toContain("storeClose");
+    expect([pruned, snapshots]).toEqual([2, 2]);
+  });
+
   it("a store.close throw on the clean-drain path still exits (no hang)", async () => {
     const { deps } = makeDeps({ drainCompletes: true });
     deps.store.close.mockImplementation(() => {

@@ -14,6 +14,13 @@ import {
   createHostThrottleMonitor,
 } from "../../src/clockify/host-throttle-monitor.js";
 import { logOutcomeUnknown, logOutcomeUnknownRecovered } from "../../src/log-outcome-unknown.js";
+import {
+  OPERATOR_HEALTH_PHASES,
+  OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS,
+  createOperatorHealthSnapshotEmitter,
+  type OperatorHealthCounts,
+  type OperatorHealthPhase,
+} from "../../src/operator-health.js";
 import { logArtifactOversizeRejected } from "../../src/log-artifact-oversize.js";
 import { createTokenRejectionMonitor } from "../../src/clockify/token-rejection-monitor.js";
 import { createModelClient } from "../../src/assistant/model-client.js";
@@ -130,6 +137,26 @@ function producedLines(row: number): string[] {
     case 9: {
       const monitor = createTokenRejectionMonitor({ aliasFor: () => "ws-aliasedvalue", log });
       for (let i = 0; i < 3; i += 1) monitor.rejected("ws");
+      return lines;
+    }
+    case 10: {
+      // Both shapes, so the heartbeat AND its degraded form are checked against
+      // the doc. Every count is 1 rather than 0 so a formatter that dropped a
+      // field could not be mistaken for an idle fleet.
+      const emitter = createOperatorHealthSnapshotEmitter({ log });
+      emitter.emit({
+        windowMs: OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS,
+        counts: {
+          runsStarted: 1, runsCompleted: 1, runsFailed: 1,
+          budgetDeniedTools: 1, budgetDeniedRuns: 1,
+          inFlight: OPERATOR_HEALTH_PHASES.length,
+          inFlightByPhase: Object.fromEntries(
+            OPERATOR_HEALTH_PHASES.map((phase) => [phase, 1]),
+          ) as Record<OperatorHealthPhase, number>,
+          stalled: 1, outcomeUnknown: 1, outcomeUnknownUnreconciled: 1, retentionBacklog: true,
+        } satisfies OperatorHealthCounts,
+      });
+      emitter.unavailable();
       return lines;
     }
     default:

@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createLiveClockifyFactory,
+  createOperatorHealthSnapshotLoop,
   createRetentionPruneLoop,
 } from "../../src/server.js";
+import {
+  OPERATOR_HEALTH_PHASES,
+  OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS,
+  createOperatorHealthSnapshotEmitter,
+  type OperatorHealthCounts,
+  type OperatorHealthPhase,
+} from "../../src/operator-health.js";
 import type { RestWorkspaceOptions } from "../../src/clockify/rest-workspace.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
 import type { Installation } from "../../src/db/store.js";
@@ -168,5 +176,63 @@ describe("live Clockify factory reaches the alert emitters (rows 6 and 9)", () =
     const { options } = composed();
     expect(options.auth).toEqual({ addonToken: "addon-token" });
     expect(options.workspaceId).toBe(installation.workspaceId);
+  });
+});
+
+describe("operator health snapshot loop reaches the emitter (row 10)", () => {
+  function healthCounts(overrides: Partial<OperatorHealthCounts> = {}): OperatorHealthCounts {
+    return {
+      runsStarted: 0, runsCompleted: 0, runsFailed: 0,
+      budgetDeniedTools: 0, budgetDeniedRuns: 0,
+      inFlight: 0,
+      inFlightByPhase: Object.fromEntries(
+        OPERATOR_HEALTH_PHASES.map((phase) => [phase, 0]),
+      ) as Record<OperatorHealthPhase, number>,
+      stalled: 0, outcomeUnknown: 0, outcomeUnknownUnreconciled: 0, retentionBacklog: false,
+      ...overrides,
+    };
+  }
+
+  it("reads the fleet counts for the configured window and emits exactly one line", () => {
+    const lines: string[] = [];
+    const since: string[] = [];
+    const prune = createOperatorHealthSnapshotLoop({
+      store: {
+        operatorHealthCounts: (input) => {
+          since.push(input.since);
+          return healthCounts({ runsStarted: 7, outcomeUnknown: 2 });
+        },
+      },
+      snapshot: createOperatorHealthSnapshotEmitter({ log: (line) => lines.push(line) }),
+      now: () => new Date("2026-07-31T12:00:00.000Z"),
+    });
+    prune();
+    // The window the loop asks for is the window it prints — a mismatch would
+    // label 15 minutes of data with some other number.
+    expect(since).toEqual([
+      new Date(new Date("2026-07-31T12:00:00.000Z").getTime() - OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS)
+        .toISOString(),
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`window_min=${OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS / 60_000}`);
+    expect(lines[0]).toContain("runs_started=7");
+    expect(lines[0]).toContain("outcome_unknown=2");
+  });
+
+  it("survives a throwing read instead of killing the process from a bare interval", () => {
+    // `start()` installs process.once("uncaughtException") -> shutdown(1), so an
+    // unguarded throw inside this interval would take the container down for a
+    // transient SQLITE_BUSY — the observability feature causing the outage.
+    const lines: string[] = [];
+    const loop = createOperatorHealthSnapshotLoop({
+      store: {
+        operatorHealthCounts: () => {
+          throw Object.assign(new Error("database is locked: SELECT secret"), { code: "SQLITE_BUSY" });
+        },
+      },
+      snapshot: createOperatorHealthSnapshotEmitter({ log: (line) => lines.push(line) }),
+    });
+    expect(() => loop()).not.toThrow();
+    expect(lines).toEqual(["[operator] event=snapshot_unavailable"]);
   });
 });

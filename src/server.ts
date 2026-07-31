@@ -17,6 +17,11 @@ import {
   logSqliteUnavailable,
 } from "./readiness-alerts.js";
 import { createRetentionAlertMonitor, type RetentionAlertMonitor } from "./retention-alerts.js";
+import {
+  OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS,
+  createOperatorHealthSnapshotEmitter,
+  type OperatorHealthSnapshotEmitter,
+} from "./operator-health.js";
 import { createWorkspaceMutationCoordinator } from "./clockify/workspace-mutation-coordinator.js";
 import {
   resolveClockifyApiBase,
@@ -324,6 +329,45 @@ export function createRetentionPruneLoop(deps: RetentionPruneLoopDeps): () => Pr
   return prune;
 }
 
+export interface OperatorHealthSnapshotLoopDeps {
+  store: Pick<Store, "operatorHealthCounts">;
+  /**
+   * REQUIRED for the same reason as the prune loop's monitor: this loop exists
+   * only to feed the emitter, `start()` is not reachable from a test, and an
+   * optional field could be dropped at the call site with a green suite —
+   * leaving a heartbeat that never beats and reads as a dead process.
+   */
+  snapshot: OperatorHealthSnapshotEmitter;
+  /** Injectable so a test drives the window without waiting on a real clock. */
+  now?: () => Date;
+  windowMs?: number;
+}
+
+/**
+ * D4 alert 10: one fleet-wide health line per interval. Extracted from
+ * `start()` for the same reason the prune loop was — inside `start()` the
+ * wiring is unprovable.
+ *
+ * The whole body is guarded. This runs from a bare `setInterval`, and `start()`
+ * installs `process.once("uncaughtException", …)` → shutdown(1), so a
+ * `SQLITE_BUSY` during a snapshot query — or a snapshot racing `store.close()`
+ * during teardown — would take the container down. An observability feature
+ * must never be able to cause the outage it is there to report, so a failed
+ * read degrades to one fixed line carrying no error detail.
+ */
+export function createOperatorHealthSnapshotLoop(deps: OperatorHealthSnapshotLoopDeps): () => void {
+  const now = deps.now ?? ((): Date => new Date());
+  const windowMs = deps.windowMs ?? OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS;
+  return () => {
+    try {
+      const since = new Date(now().getTime() - windowMs).toISOString();
+      deps.snapshot.emit({ windowMs, counts: deps.store.operatorHealthCounts({ since }) });
+    } catch {
+      deps.snapshot.unavailable();
+    }
+  };
+}
+
 /** Drain budget before force-exit — Railway SIGKILLs shortly after SIGTERM. */
 const FORCE_EXIT_AFTER_MS = 10_000;
 const RESTORE_PROBE_CHILD_ARG = "--restore-readiness-probe-child";
@@ -334,6 +378,8 @@ export interface ShutdownDeps {
   store: { close(): void };
   /** Cleared first so the retention sweep can't fire mid-teardown. */
   pruneTimer?: NodeJS.Timeout;
+  /** Same: a snapshot read must not race the store close (D4). */
+  snapshotTimer?: NodeJS.Timeout;
   exit?: (code: number) => void;
   forceExitAfterMs?: number;
   log?: (message: string) => void;
@@ -358,6 +404,7 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string, exit
     deps.onDraining?.();
     log(`${signal} received — draining`);
     if (deps.pruneTimer) clearInterval(deps.pruneTimer);
+    if (deps.snapshotTimer) clearInterval(deps.snapshotTimer);
     // Close the store then exit. The store close may throw if the drain still
     // holds a statement open — exit regardless (so a throw never hangs teardown).
     const finish = (code: number): void => {
@@ -477,6 +524,13 @@ export async function start(): Promise<void> {
   const pruneTimer = setInterval(() => { void prune(); }, PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 
+  const healthSnapshot = createOperatorHealthSnapshotLoop({
+    store,
+    snapshot: createOperatorHealthSnapshotEmitter(),
+  });
+  const snapshotTimer = setInterval(healthSnapshot, OPERATOR_HEALTH_SNAPSHOT_INTERVAL_MS);
+  snapshotTimer.unref();
+
   const onListening = (): void => {
     // Intentionally minimal, non-secret startup log.
     if (restoreProbeRequested) {
@@ -492,6 +546,10 @@ export async function start(): Promise<void> {
     // it — the prune now seeks narrow retention indexes, but on a long-lived
     // instance the first sweep should never delay accepting connections.
     void prune();
+    // One baseline snapshot at boot rather than a quarter hour of silence:
+    // startup recovery has just settled crash-orphaned steps, so this is the
+    // line that reports how much ambiguity the restart left behind.
+    healthSnapshot();
   };
   // Ordinary PORT validation remains strictly positive. Only the explicit
   // restore-probe child with a live IPC channel may ask the OS for loopback port
@@ -506,6 +564,7 @@ export async function start(): Promise<void> {
     server,
     store,
     pruneTimer,
+    snapshotTimer,
     onDraining: () => {
       readiness.ready = false;
     },

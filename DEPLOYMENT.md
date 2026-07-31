@@ -1365,13 +1365,18 @@ Exactly what that pin proves, so it is not read as more than it is:
   SOURCE: the string must appear on a line that also calls `console`. That proves the
   string is emitted code rather than prose; it does not prove the handler runs.
 - Separately, `tests/unit/alert-production-wiring.test.ts` proves the production
-  composition actually reaches the emitters for rows 3, 6 and 9, and
+  composition actually reaches the emitters for rows 3, 6, 9 and 10,
   `tests/integration/alert-log-privacy.test.ts` does the same for rows 1, 4 and 8 by
-  driving real routes and the real store. The remaining wiring assurance is structural:
-  the monitors are REQUIRED constructor fields, so dropping one at the `start()` call
-  site is a compile error. Nothing asserts at BOOT that `start()` made those calls at
-  all, so a wholesale removal of a factory call — or passing a monitor that does
-  nothing — would still be silent; `start()` is not reachable from a test.
+  driving real routes and the real store, and
+  `tests/integration/operator-health-snapshot.test.ts` does it for row 10 against real
+  runs in a real database. The remaining wiring assurance is structural: the monitors
+  and the snapshot emitter are REQUIRED constructor fields, so dropping one at the
+  `start()` call site is a compile error. Nothing asserts at BOOT that `start()` made
+  those calls at all, so a wholesale removal of a factory call — or passing a monitor
+  that does nothing — would still be silent; `start()` is not reachable from a test.
+  The two background timers — row 3's retention prune and row 10's snapshot — are the
+  same shape: `createShutdownHandler` clears both and a unit test pins that, but nothing
+  proves `start()` created either.
 
 | # | Condition | Match string | Emitter | Firing rule |
 |---|---|---|---|---|
@@ -1384,10 +1389,39 @@ Exactly what that pin proves, so it is not read as more than it is:
 | 7 | Model-provider failure | `provider_http_error status=` | `src/assistant/model-client.ts` | Every non-2xx. A ` retry=1` suffix marks the attempt that will be retried once, so a retried failure emits twice. |
 | 8 | Artifact oversize reject | `[storage] event=artifact_oversize_rejected` | `src/log-artifact-oversize.ts` | Every occurrence. In production expect only `site=download`: all three caps are the same 1,000,000 bytes, so the adapter's bounded binary GET always refuses first. `site=export` (alternate non-REST client) and `site=persist` (a caller bypassing the harness guard) are defence in depth — either one appearing means something upstream is not what it is assumed to be. `bytes=` is absent only when the adapter cancelled the body mid-stream and holds a lower bound rather than a measurement. |
 | 9 | Repeated installation-token rejection | `[install-authority] event=token_rejected_suspect` | `src/clockify/token-rejection-monitor.ts` | Once per streak, per workspace; resets on an accepted response. Authority is never changed from a wire signal — retiring the row is a deliberate operator act. |
+| 10 | Fleet health heartbeat and levels | `[operator] event=health_snapshot`, `[operator] event=snapshot_unavailable` | `src/operator-health.ts` | UNCONDITIONALLY every 15 minutes plus once at boot, all-zero lines included — the opposite of every other row, because absence of the heartbeat is itself the signal. Alert on the FIELDS, not the line. Page on: `stalled` above 0 (a run neither progressing nor waiting on a human); `outcome_unknown_unreconciled` above 0 (an ambiguous write no reconciliation pass has examined); `retention_backlog=1`; and `in_flight` not equal to the sum of the five `phase_` fields, which means a run phase this build has no field for is being written and the histogram is silently incomplete. Watch as a trend, do NOT page: `outcome_unknown` (see below) and `runs_failed`/`budget_denied_runs` beside `runs_started` — these are windowed flows, not a ledger, so a run that starts in one window and fails in the next appears on two different lines and they are not a strict ratio. Field notes so none is over-read: `retention_backlog` answers "did the LAST RECORDED sweep finish", not "did a sweep happen" — it reads 0 whenever no sweep record exists (a fresh database, a prune that never ran, or a sweep record that aged out after 90 silent days), so "the prune is not running" is row 3's job, not this field's; `outcome_unknown` is a STANDING backlog whose only drop paths are a restart's reconciliation and 30-day retention — a row reconciliation examined and could not settle keeps the status, is never a candidate again, and no operator action clears it, which is exactly why the pageable half of the pair is `outcome_unknown_unreconciled` and this one is watched for a RISE; `runs_failed` counts the run PHASE, not `run.failed` events, so the eventless `failActiveRunsForSession` failures are included; `stalled` deliberately excludes both `awaiting_` phases, because a lapsed confirmation is terminalized only LAZILY when the same session's next request arrives, so an abandoned session parks a run there until retention and would make the field grow forever; there is no `phase_preparing_writes` field because no code ever assigns that phase. `snapshot_unavailable` means the read itself threw — it carries no error detail by design, and it is a DIFFERENT string so one grep never reports both conditions. |
 
 Row 9 is not in the original eight. It is the one alert the codebase already emitted and
 the runbook never documented; leaving it undocumented would have meant an operator could
 not see an installation whose token Clockify has started refusing.
+
+Row 10 is not an alert at all in the sense the other nine are — it is the fleet aggregate,
+and it lives in the log plane on purpose. `GET /api/metrics` cannot answer "is the fleet
+healthy": it is session-gated and every read behind it is keyed on the caller's workspace
+AND admin id, which is its stated privacy contract. Returning a cross-workspace aggregate
+to one admin's session would be an authorization regression, and an operator-scoped route
+would need an operator credential that this system does not have — no `OPS_`/`OPERATOR_`
+secret exists anywhere, because every authenticated surface is a Clockify admin session.
+So the aggregate goes to the log plane, and `GET /api/metrics` keeps its per-admin scoping
+exactly as it was.
+
+**OWNER VERIFICATION REQUIRED — the log plane's access control is not established by this
+repository.** Nothing in `railway.json`, this runbook, or the workflows states who can read
+production logs, through what authenticated path, or how long they are retained. That is
+not a claim this document is able to source, so it is not made. Until the owner records the
+answers here, row 10 must be treated as reaching *whoever can read this deployment's logs*,
+whoever that turns out to be. Three things to establish and write down:
+
+1. Who holds Railway project access that can read deployed logs, and whether that set is
+   restricted to the release owner or is broader (e.g. every project collaborator).
+2. Whether that access is behind an authenticated path with MFA, and whether log reads are
+   themselves audited.
+3. Log retention: how long a `[operator] event=health_snapshot` line persists, and whether
+   logs are exported anywhere beyond Railway.
+
+Until (1)–(3) are recorded, the row-10 aggregate is the LEAST sensitive thing it could be —
+counts only, no workspace dimension, no alias, no string field — but "the operator's trust
+boundary" is an assumption about the platform, not a verified property of this deployment.
 
 "Repeated" and "sustained" are numbers, not adjectives, and every constant below is
 asserted against this file by the contract test above:
@@ -1425,12 +1459,32 @@ Known limits, so neither row is trusted past what it does:
   on a crash-looping instance. That specific scenario — a full or read-only volume — is
   covered instead by rows 1 and 4, which fire on the first occurrence and do not depend
   on an accumulated count.
+- Row 10's LEVEL fields (`in_flight`, the five `phase_`, `stalled`, both `outcome_unknown`
+  fields, `retention_backlog`) answer only what is true at the instant the snapshot runs,
+  so a stall that starts and clears inside one 15-minute interval leaves no trace here;
+  the per-event rows are what catch those. Its FLOW fields (`runs_started`,
+  `runs_completed`, `runs_failed`, both `budget_denied_`) cover the last window only and
+  are never a running total.
+- Row 10's windows do not tile. `setInterval` drifts by however long the previous snapshot
+  and the rest of the event loop took, so consecutive windows overlap or leave a gap, and
+  an event landing in a gap is counted by NO line. Never sum flow fields across lines.
+- Row 10's FIRST line after a restart is distorted and must not be read as a rate. Store
+  construction stamps every crash-orphaned run's synthetic `run.failed` — and its
+  `phase='failed'` — with the CURRENT time, however long ago the process died, so the boot
+  snapshot attributes every historical orphan to the last 15 minutes. It is a real signal
+  ("this restart found N stranded runs"); the second line, 15 minutes later, is the first
+  one measuring live traffic.
 
 No alert line carries a raw workspace, admin, or entity id, a token, or admin-authored
 text. Where a session secret is in scope the workspace appears as an HMAC alias
 (`workspace=ws-…`, `src/log-alias.ts`); where none is, the field is omitted rather than
-threaded in. `tests/integration/alert-log-privacy.test.ts` drives hostile values through
-these paths and asserts on identifier SHAPES, not just literals.
+threaded in. Row 10 goes further and carries NO workspace dimension at all, not even an
+alias: it is the one line aggregated across tenants, and a per-workspace breakdown of a
+fleet aggregate would re-introduce exactly the cross-tenant correlation the aggregate
+exists to avoid. Its type has no string field, so it cannot regress into carrying one.
+`tests/integration/alert-log-privacy.test.ts` and
+`tests/integration/operator-health-snapshot.test.ts` drive hostile values through these
+paths and assert on identifier SHAPES, not just literals.
 
 ## Final handoff - exactly three admin-only packages
 
