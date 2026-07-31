@@ -118,7 +118,6 @@ export function buildAssistantRunStore(ctx: StoreContext): {
     authClass: AuthClass,
     catalogHash: string,
   ): RunState | undefined;
-  recoverOrphanedActiveRuns(scope: Omit<AssistantRunScope, "runId">): number;
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
 } {
   const { db, now, nowIso } = ctx;
@@ -303,27 +302,6 @@ export function buildAssistantRunStore(ctx: StoreContext): {
         authClass,
       };
       return getRunRow(scope);
-    },
-    recoverOrphanedActiveRuns(scope) {
-      const rows = db.prepare(
-        `SELECT run_id FROM assistant_runs
-          WHERE session_id = ? AND workspace_id = ? AND admin_user_id = ?
-            AND installation_generation = ? AND auth_class = ?
-            AND phase IN ('model', 'discovering', 'executing_reads', 'preparing_writes')`,
-      ).all(scope.sessionId, scope.workspaceId, scope.adminUserId, scope.installationGeneration, scope.authClass) as Array<{ run_id: string }>;
-      let count = 0;
-      for (const row of rows) {
-        db.prepare(
-          `UPDATE assistant_runs SET phase = 'failed', updated_at = ?
-           WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?`,
-        ).run(nowIso(), scope.sessionId, row.run_id, scope.workspaceId, scope.adminUserId);
-        db.prepare(
-          `UPDATE turn_runs SET status = 'failed', updated_at = ?
-           WHERE session_id = ? AND request_id = ?`,
-        ).run(nowIso(), scope.sessionId, row.run_id);
-        count += 1;
-      }
-      return count;
     },
     failActiveRunsForSession(sessionId, workspaceId, adminUserId, code) {
       void code;

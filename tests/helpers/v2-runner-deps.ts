@@ -56,7 +56,6 @@ export function mockRunnerDeps(overrides: Partial<RunnerDependencies> = {}): Run
       getActionResult: vi.fn(() => undefined),
       getLastRunEventSequence: vi.fn(() => sequence),
       findLatestEligibleRunForCache: vi.fn(),
-      recoverOrphanedActiveRuns: vi.fn(() => 0),
       failActiveRunsForSession: vi.fn(() => 0),
     },
     eventService: eventService as unknown as RunnerDependencies["eventService"],

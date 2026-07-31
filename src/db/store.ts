@@ -327,7 +327,6 @@ export interface Store {
     authClass: import("../harness/api-operation.js").AuthClass,
     catalogHash: string,
   ): import("../assistant-v2/state.js").RunState | undefined;
-  recoverOrphanedActiveRuns(scope: import("../assistant-v2/protocol.js").RunScope): number;
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
   startRunWithEvent(input: import("./store/runs.js").StartAssistantRunInput): import("../assistant-v2/events.js").SequencedRunEvent;
   listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput): import("./store/run-events.js").RunEventPageStoreResult;

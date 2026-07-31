@@ -159,7 +159,6 @@ function statefulDeps(
       }),
       getLastRunEventSequence: vi.fn(() => sequence),
       findLatestEligibleRunForCache: vi.fn(() => priorRunSeeding(seedToolName)),
-      recoverOrphanedActiveRuns: vi.fn(() => 0),
       failActiveRunsForSession: vi.fn(() => 0),
     },
     eventService,

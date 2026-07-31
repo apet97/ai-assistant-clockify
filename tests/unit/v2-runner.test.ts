@@ -75,7 +75,6 @@ function fakeDeps(overrides: Partial<RunnerDependencies> = {}): RunnerDependenci
     saveRun: vi.fn(),
     getLastRunEventSequence: vi.fn(() => 0),
     findLatestEligibleRunForCache: vi.fn(() => undefined),
-    recoverOrphanedActiveRuns: vi.fn(() => 0),
     failActiveRunsForSession: vi.fn(() => 0),
   };
   return {
@@ -262,7 +261,6 @@ describe("runAssistantV2", () => {
         saveRun: vi.fn(),
         getLastRunEventSequence: vi.fn(() => 1),
         findLatestEligibleRunForCache: vi.fn(() => undefined),
-        recoverOrphanedActiveRuns: vi.fn(() => 0),
         failActiveRunsForSession: vi.fn(() => 0),
       } as unknown as RunnerDependencies["runStore"],
     });
@@ -326,7 +324,6 @@ describe("prepareWrites denial journaling (review-gate HIGH-2)", () => {
         saveRun: vi.fn(),
         getLastRunEventSequence: vi.fn(() => 1),
         findLatestEligibleRunForCache: vi.fn(() => undefined),
-        recoverOrphanedActiveRuns: vi.fn(() => 0),
         failActiveRunsForSession: vi.fn(() => 0),
       } as unknown as RunnerDependencies["runStore"],
     });

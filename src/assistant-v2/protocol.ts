@@ -180,7 +180,6 @@ export interface RunStateStore {
     authClass: AuthClass,
     catalogHash: string,
   ): import("./state.js").RunState | undefined;
-  recoverOrphanedActiveRuns(scope: RunScope): number;
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
 }
 
