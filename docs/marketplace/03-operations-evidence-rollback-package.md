@@ -1,4 +1,39 @@
-# Release, incident, reconciliation, and rollback runbook - version 1.0.0
+# Release, incident, reconciliation, and rollback runbook - version 1.0.0 (v1)
+
+> ## Scope: do not release or deploy from this page.
+>
+> **The release, deploy, and backup-drill sections — "Canonical production release
+> order" through "Canonical checked-in evidence import" — are v1 1.0.0 history.**
+> They name `/data/ai-assistant.sqlite`, the retired v1 database, and they bind the
+> frozen 1.0.0 candidate, `version 1.0.0`, and `SELECTED_ASSISTANT_ENGINE:-v1`.
+> Production serves engine **v2** from `/data/ai-assistant-v2.sqlite`. For a v2
+> release, deploy, or backup drill use the v2 runbook at
+> `docs/marketplace/03-operations-v2-runbook.md`.
+>
+> **Do not "correct" the v1 paths here.** They are deliberately unchanged. One
+> database path per document is what keeps the two runbooks from drifting; the v2
+> paths belong to the v2 runbook.
+>
+> **This page is not an executable v1 rollback either.** From current production its
+> export block passes neither disposition: `existing_expected` is refused because
+> `SELECTED_DATABASE_PATH` is not the live path (`scripts/deploy-private-production.ts`),
+> and `new_unused` is refused because the retained v1 database is nonempty and carries
+> no fresh-cutover marker (`src/db/fresh-boundary.ts`). ADR 003 additionally requires
+> clearing the stale installation row before the reinstall, which no section below
+> does. A v1 rollback is owner-planned work against `planSignedFullV1Rollback`, not a
+> literal read-through of this page.
+>
+> **The incident sections below still apply to both engines** and are not duplicated
+> anywhere else in the repository: "Outcome vocabulary", "Pause and triage",
+> "Database restore and disaster recovery", "Provider outage", "Clockify throttle or
+> host outage", "Uninstall or installation revocation", "Required incident record",
+> and "Re-enable criteria". Substitute the live database path when following them.
+> "Application rollback" is the exception — it is v1-bound, because it says to keep
+> the same volume and encryption keys, which is wrong for a v2-to-v1 return.
+>
+> Section names are quoted rather than written as `##` headings on purpose: several
+> contract assertions locate a section with `indexOf("## <name>")`, and a heading
+> anchor repeated up here would silently retarget them to this banner.
 
 This is an executable operator runbook. It does not grant release authority and it does
 not treat application rollback as reversal of a Clockify effect. Record every release

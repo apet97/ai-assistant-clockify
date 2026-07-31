@@ -447,3 +447,83 @@ describe("release operations contract", () => {
     expect(pkg.scripts["db:verify-restore"]).toContain("tsx scripts/verify-restored-db.ts");
   });
 });
+
+// Deliberately NOT folded into the two-file loops above. Those assert
+// v1-by-design facts — the `"v1"` engine equality at the cutover guard, the
+// exact v1 backup command, the 1.0.0 key-rotation drill — which a v2 runbook
+// must fail. Joining them would force a v2 fork to impersonate v1.
+describe("v1 rollback runbook scope", () => {
+  const V1_RUNBOOK = "docs/marketplace/03-operations-evidence-rollback-package.md";
+
+  it("refuses release and deploy use unambiguously", () => {
+    // Production serves engine v2 from `/data/ai-assistant-v2.sqlite`, but every
+    // executable release step on this page names the retired v1 database. The
+    // title says only "version 1.0.0" and no procedure carries an engine
+    // qualifier, so without an explicit refusal an operator reads a generic
+    // "release, incident, reconciliation, and rollback runbook" and follows it
+    // against v2 — completing a full backup and restore drill of a database
+    // nothing is serving before the deploy transaction refuses the upload.
+    const runbook = read(V1_RUNBOOK);
+    expect(runbook).toContain("## Scope: do not release or deploy from this page.");
+    expect(runbook).toContain("docs/marketplace/03-operations-v2-runbook.md");
+    // Ahead of the first procedure, not buried below it.
+    expect(runbook.indexOf("Scope: do not release or deploy"))
+      .toBeLessThan(runbook.indexOf("## Canonical production release order"));
+  });
+
+  it("keeps the incident sections applicable to both engines", () => {
+    // The refusal is scoped to release/deploy/backup ON PURPOSE. Triage and
+    // disaster recovery exist NOWHERE else in the repository, so a blanket "does
+    // not apply to v2" would leave a v2 operator with no incident procedure at
+    // all — and the v2 runbook it redirects to does not exist until D9 forks it.
+    const runbook = read(V1_RUNBOOK);
+    const banner = runbook.slice(0, runbook.indexOf("## Canonical production release order"));
+    // The banner is a wrapped blockquote, so a section name can straddle a
+    // `>`-prefixed line break. Match against the unwrapped text.
+    const bannerText = banner.replace(/^>\s?/gmu, "").replace(/\s+/gu, " ");
+    expect(bannerText).toContain("The incident sections below still apply to both engines");
+    for (const section of [
+      "Outcome vocabulary",
+      "Pause and triage",
+      "Database restore and disaster recovery",
+      "Provider outage",
+      "Clockify throttle or host outage",
+      "Uninstall or installation revocation",
+      "Required incident record",
+      "Re-enable criteria",
+    ]) {
+      // Named in the banner AND still present as a real section below it.
+      expect(bannerText, `${section} must stay named in the banner`).toContain(`"${section}"`);
+      expect(runbook, `${section} must stay a real section`).toContain(`\n## ${section}\n`);
+    }
+    // "Application rollback" is the stated exception: it keeps the same volume
+    // and encryption keys, which is wrong for a v2-to-v1 return.
+    expect(bannerText).toContain('"Application rollback" is the exception');
+    // The banner must never mint a `## <name>` anchor: several contract
+    // assertions locate a section with indexOf("## <name>"), and a duplicate
+    // above the real heading silently retargets them to this banner. That is
+    // not hypothetical — it inverted the Application-rollback slice at :416.
+    expect(banner).not.toMatch(/^>?\s*#{2,}\s+(?!Scope: )/mu);
+  });
+
+  it("keeps the v1 database path in every executable step", () => {
+    // One database path per document: this page keeps the v1 path in its
+    // executable steps and the v2 runbook owns the v2 path. Correcting the same
+    // path in two documents is how the two runbooks drift apart.
+    const runbook = read(V1_RUNBOOK);
+    // Anchored on the argument and assignment forms rather than the bare path,
+    // because the scope banner NAMES both databases in prose. An unanchored
+    // count would move whenever that prose is reworded.
+    expect(runbook.match(/-- \/data\/ai-assistant\.sqlite/gu)).toHaveLength(2);
+    expect(runbook).toContain('export SELECTED_DATABASE_PATH="/data/ai-assistant.sqlite"');
+    // The fourth site. It must keep DERIVING, never carry a literal: the real
+    // cutover decoupled these two (`docs/V2_CUTOVER_RECORD.md`), so a future
+    // editor has a live precedent for hardcoding it, and the predeploy gate
+    // compares the backup's own recorded source against exactly this value.
+    expect(runbook).toContain('export PREDEPLOY_SOURCE_DATABASE_PATH="$SELECTED_DATABASE_PATH"');
+    expect(runbook).not.toMatch(/PREDEPLOY_SOURCE_DATABASE_PATH="\/data\//u);
+    // The v2 path may be NAMED by the scope banner; it must never be EXECUTED here.
+    expect(runbook).not.toMatch(/-- \/data\/ai-assistant-v2\.sqlite/u);
+    expect(runbook).not.toContain('SELECTED_DATABASE_PATH="/data/ai-assistant-v2.sqlite"');
+  });
+});
