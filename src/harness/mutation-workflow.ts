@@ -9,6 +9,7 @@ import {
 } from "../clockify/write-outcome.js";
 import type { CommitResult } from "./action.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
+import { classifyLoggableError } from "../log-error-class.js";
 import { boundedCompleteSanitizedJson, exactNonsecretJson } from "./safe-json.js";
 import {
   MutationDispatchDenied,
@@ -80,8 +81,7 @@ function degradedSettlementDetail(input: {
 
 function logDegradedSettlement(kind: "primary" | "compensation", error: unknown): void {
   console.error(
-    `${kind} mutation step settlement remained degraded after dispatch:`,
-    error instanceof Error ? error.message : String(error),
+    `${kind} mutation step settlement remained degraded after dispatch: ${classifyLoggableError(error)}`,
   );
 }
 

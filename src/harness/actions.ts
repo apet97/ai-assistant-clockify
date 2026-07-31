@@ -1,4 +1,5 @@
 import { getAction, suggestActionNames } from "./catalog.js";
+import { classifyLoggableError } from "../log-error-class.js";
 import {
   clarifyResult,
   isAtomicLedger,
@@ -515,10 +516,7 @@ function settleImmediateOperation(
   try {
     ctx.operationJournal.settle(operationId, status, result);
   } catch (error) {
-    console.error(
-      "operation journal settlement failed:",
-      error instanceof Error ? error.message : String(error),
-    );
+    console.error(`operation journal settlement failed: ${classifyLoggableError(error)}`);
   }
   return { ...result, operationId };
 }
@@ -1000,11 +998,10 @@ async function commitViaAtomicLedger(
  */
 export const CLAIM_HEARTBEAT_MS = 90_000;
 
-/** Log a post-commit ledger write failure (message only — never secrets). */
+/** Log a post-commit ledger write failure (bounded classification — never the message). */
 function logLedgerBookkeepingFailure(error: unknown): void {
   console.error(
-    "idempotency ledger bookkeeping failed (commit already applied; receipt preserved):",
-    error instanceof Error ? error.message : String(error),
+    `idempotency ledger bookkeeping failed (commit already applied; receipt preserved): ${classifyLoggableError(error)}`,
   );
 }
 

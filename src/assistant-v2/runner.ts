@@ -1,4 +1,5 @@
 import { ProviderProtocolError } from "../assistant/model-client.js";
+import { classifyLoggableError } from "../log-error-class.js";
 import {
   canReserveModelCall,
   isActiveWallBudgetExceeded,
@@ -261,11 +262,12 @@ export async function runAssistantV2(
       iterationObservations.push(...denials.observations);
     } catch (error) {
       // A stable server code, never the raw exception text (which can carry
-      // Clockify data or driver SQL) — the real cause is logged server-side.
-      console.error(
-        "v2 iteration failed before durable completion:",
-        error instanceof Error ? error.message : String(error),
-      );
+      // Clockify data or driver SQL). D5: that was true of the RUN RESULT but
+      // not of this line, which logged the very text the comment warns about —
+      // this iteration wraps read execution, so a `Clockify GET
+      // /workspaces/<id>/… -> 404: <body>` message lands here. Both now carry
+      // only the classification.
+      console.error(`v2 iteration failed before durable completion: ${classifyLoggableError(error)}`);
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
       return runs.failRun(state, "internal_error");
     }

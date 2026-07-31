@@ -30,6 +30,7 @@
  */
 import type { Request, Response } from "express";
 import { createHash, randomUUID } from "node:crypto";
+import { classifyLoggableError } from "../log-error-class.js";
 import {
   createSlidingWindowLimiter,
   DEFAULT_CHAT_RATE_LIMIT_MAX,
@@ -512,8 +513,7 @@ export function createControlPlane(deps: AppDeps): ControlPlane {
     }
     if (!resultRef) {
       console.error(
-        "canonical action-result persistence degraded (change already applied; receipt preserved):",
-        settlementError instanceof Error ? settlementError.message : String(settlementError),
+        `canonical action-result persistence degraded (change already applied; receipt preserved): ${classifyLoggableError(settlementError)}`,
       );
     }
     if (resultRef) {

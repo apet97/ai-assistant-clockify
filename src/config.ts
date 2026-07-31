@@ -242,13 +242,46 @@ const envSchema = envObjectSchema.superRefine((v, ctx) => {
  */
 export const ENV_SCHEMA_KEYS: readonly string[] = Object.keys(envObjectSchema.shape);
 
+/**
+ * Attach the offending VARIABLE NAMES to a validation failure, on the
+ * declared-safe channel `classifyLoggableError` reads.
+ *
+ * A boot failure is logged as a bounded classification, so `startup failed:
+ * name=ZodError` alone would leave an operator with nothing actionable. The
+ * issue `path` is the schema's own key — `SESSION_SECRET`, `LLM_PROVIDER` —
+ * and is therefore safe to name, whereas the message beside it is not: a
+ * `too_small` issue reports only a length bound, but an `invalid_enum_value`
+ * issue echoes the REJECTED VALUE verbatim, and this schema reads secrets
+ * (`SESSION_SECRET`, `DATA_ENCRYPTION_KEY`, `LLM_API_KEY`) out of the same
+ * object. Paths, not messages, is the line that keeps both properties.
+ *
+ * The original error is rethrown UNCHANGED apart from the added property, so
+ * the thrown message an operator sees interactively (and every `.toThrow(/…/)`
+ * assertion in tests/unit/config.test.ts) is untouched.
+ */
+function withLogSafeIssuePaths(error: unknown): unknown {
+  if (!(error instanceof z.ZodError)) return error;
+  const paths = [...new Set(error.issues.map((issue) => issue.path.join(".")).filter((path) => path.length > 0))];
+  if (paths.length === 0) return error;
+  return Object.assign(error, { logSafeDetail: paths.join(",") });
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
-  const parsed = envSchema.parse(env);
+  let parsed: z.infer<typeof envSchema>;
+  try {
+    parsed = envSchema.parse(env);
+  } catch (error) {
+    throw withLogSafeIssuePaths(error);
+  }
   const nodeEnv = parsed.NODE_ENV ?? "development";
 
   if (nodeEnv !== "test" && !parsed.DATA_ENCRYPTION_KEY) {
-    throw new Error(
-      "DATA_ENCRYPTION_KEY is required outside NODE_ENV=test (installation tokens must not be stored in plaintext).",
+    throw Object.assign(
+      new Error(
+        "DATA_ENCRYPTION_KEY is required outside NODE_ENV=test (installation tokens must not be stored in plaintext).",
+      ),
+      // Same channel: this check is outside the schema, so it names its own key.
+      { logSafeDetail: "DATA_ENCRYPTION_KEY" },
     );
   }
 

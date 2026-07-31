@@ -176,11 +176,23 @@ export interface ModelClientConfig {
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Single retry on a transient provider failure (429/5xx), fixed backoff. */
 const RETRY_BACKOFF_MS = 750;
+/**
+ * Correlation id for a provider failure — the one value on the alert line that
+ * the PROVIDER controls rather than this codebase. Real ids are UUIDs, opaque
+ * request tokens, or a `cf-ray`, so bounding to that shape costs nothing and
+ * keeps the operator-log claim in PRIVACY.md true without a carve-out: a
+ * provider that returned a long or whitespace-bearing header could otherwise
+ * put unbounded text — or a forged second log line — into the log.
+ */
+const MAX_PROVIDER_REQUEST_ID = 64;
+const BOUNDED_PROVIDER_REQUEST_ID = /^[A-Za-z0-9_.:-]+$/u;
+
 function providerRequestId(response: Response): string {
-  return response.headers?.get("x-request-id")
+  const raw = response.headers?.get("x-request-id")
     ?? response.headers?.get("request-id")
-    ?? response.headers?.get("cf-ray")
-    ?? "unknown";
+    ?? response.headers?.get("cf-ray");
+  if (raw === null || raw === undefined || raw.length === 0) return "unknown";
+  return raw.length <= MAX_PROVIDER_REQUEST_ID && BOUNDED_PROVIDER_REQUEST_ID.test(raw) ? raw : "unclassified";
 }
 
 function providerFailure(category: string, response: Response): Error {

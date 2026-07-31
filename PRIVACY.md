@@ -25,7 +25,9 @@ metadata; it cannot inspect Clockify tool output.
 The model **never** receives Clockify tokens, the add-on token, session secrets, the
 model API key, raw HTTP headers, confirmation nonce hashes, or stored encrypted
 credentials. Provider error bodies are not logged. Prompts, tool-result bodies,
-headers, and tokens are excluded from production provider-error logs.
+headers, and tokens are excluded from production provider-error logs. That is the
+narrowest of several log sinks; **Server operational logs** below states what every
+other one contains.
 
 ## What is stored, and for how long
 
@@ -70,6 +72,48 @@ Plaintext confirmation nonces are never stored in replay/history envelopes. When
 confirmation is cancelled, expires, settles, or is recovered after a restart, its nonce
 hash, saved agent state, and executable operation payload are erased; canonical receipts
 and bounded audit/recovery evidence remain until their applicable retention window ends.
+
+## Server operational logs
+
+Logs are a **separate sink** from the database above. They are written to the hosting
+platform's log stream, not to SQLite, so they are governed by that platform's retention
+rather than by `RETENTION_DAYS`, and they survive an uninstall erasure. That is why what
+may enter them is constrained at the source.
+
+A caught error is not safe to print. A malformed request body reaches the error object
+*through its message* — the JSON parser quotes the offending bytes verbatim, so a
+mistyped chat request can put a fragment of the admin's own sentence, a workspace id, or
+a token prefix into the message. A schema-validation error likewise echoes the rejected
+value and the submitted field names. Accordingly, **no server log line — request-error,
+background-task, or crash — carries the caught value's message text**, stack, or captured
+payload. Each carries a bounded classification: the error's type name plus its driver,
+HTTP, or parser code — for example
+`request error: name=SyntaxError type=entity.parse.failed status=400`. A field that does
+not already look like such a code is reported as `unclassified` rather than printed
+(`src/log-error-class.ts`, pinned by `tests/unit/error-log-privacy-contract.test.ts`).
+The HTTP response returned to the caller carries even less: a fixed sentence and the
+status code, never the error.
+
+Every other operator line is built from fixed vocabulary, counts, bounded identifiers,
+and hashed aliases — workspace and add-on ids appear as HMAC aliases rather than raw ids.
+The one value on any alert line that a third party controls is the model provider's
+correlation id, and it is bounded to an identifier shape at the source
+(`src/assistant/model-client.ts`) rather than trusted. Two limits are stated rather than
+implied:
+
+- Clockify request paths, which contain workspace and entity ids, do appear in the
+  list-pagination backstop warning emitted by the REST adapter (`src/clockify/rest/`).
+  That line is not an error log and carries no response body.
+- Durable operation rows — in the database, not the log — retain the failure message
+  itself, because reconciling an uncertain write requires knowing how it failed. For a
+  failed Clockify call that message is built by this add-on and is bounded by
+  construction — the method, the request path, the HTTP status, and at most 200 bytes of
+  the response body — but it is **not** redacted: the path carries workspace and entity
+  ids, and those 200 bytes are host data. What protects it is that it is stored, never
+  logged; it follows the retention table above and is erased on uninstall.
+
+Prompts, tool results, request headers, cookies, installation tokens, confirmation
+nonces, and model API keys are never written to any log.
 
 ## Encryption
 

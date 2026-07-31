@@ -11,6 +11,7 @@ import { createWorkspaceRequestGovernor, type WorkspaceRequestGovernor } from ".
 import { createTokenRejectionMonitor, type TokenRejectionMonitor } from "./clockify/token-rejection-monitor.js";
 import { createHostThrottleMonitor, type HostThrottleMonitor } from "./clockify/host-throttle-monitor.js";
 import { logAlias } from "./log-alias.js";
+import { classifyLoggableError } from "./log-error-class.js";
 import {
   classifySqliteFailure,
   createReadinessAlertMonitor,
@@ -198,11 +199,25 @@ export function createApp(
   // throws SQLITE_BUSY mid-turn) are routed here by the route asyncHandler.
   // Without it Express 4 leaves the request hanging AND the rejection becomes a
   // fatal unhandledRejection — one bad turn would take down every session. We
-  // log (no secrets — the error message only, never headers/tokens) and return a
-  // calm response so the server stays up. If an NDJSON stream already started,
-  // emit a terminal error line instead of trying to set a status on sent headers.
+  // log a BOUNDED CLASSIFICATION and return a calm response so the server stays
+  // up. If an NDJSON stream already started, emit a terminal error line instead
+  // of trying to set a status on sent headers.
+  //
+  // D5: this used to log `err.message`, described as "no secrets — the error
+  // message only". That was false, and the very next comment said so. The
+  // request body reaches this handler THROUGH the message: body-parser's
+  // `entity.parse.failed` wraps V8's JSON.parse text, which quotes the
+  // offending bytes verbatim (`Unexpected token 'd', "delete eve"...`), and a
+  // ZodError message echoes rejected values and submitted key names. Both
+  // sinks — this log and the response body below — now carry the same thing:
+  // the classification and the status, never the message.
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("request error:", err instanceof Error ? err.message : String(err));
+    // Read the status BEFORE logging: a 400 and a 413 are the two cases an
+    // operator most needs to tell apart here, and both live only on the error.
+    const status = (err as { status?: unknown; statusCode?: unknown })?.status ?? (err as { statusCode?: unknown })?.statusCode;
+    console.error(
+      `request error: ${classifyLoggableError(err)} status=${typeof status === "number" ? status : "none"}`,
+    );
     // D3 alert 4: the prose line above is not alertable — a SQLITE_BUSY, a 413,
     // and any other route rejection all produce the identical prefix. Classify
     // the storage failures the runbook names and emit the CLASSIFICATION beside
@@ -217,9 +232,8 @@ export function createApp(
     // Body-parser client errors (oversized payload → 413, malformed JSON → 400)
     // carry their own 4xx status — honor it so the caller learns it was a client
     // mistake, not a server fault. A bare server error (e.g. a SQLITE_BUSY thrown
-    // mid-turn, no .status) stays a calm 500. Never echo err.message (it could
-    // carry request data); the status is enough.
-    const status = (err as { status?: unknown; statusCode?: unknown })?.status ?? (err as { statusCode?: unknown })?.statusCode;
+    // mid-turn, no .status) stays a calm 500. Never echo err.message (it carries
+    // request data, as above); the status is enough.
     if (typeof status === "number" && status >= 400 && status < 500) {
       res.status(status).json({ ok: false, code: "invalid_request", message: "The request was rejected (too large or malformed)." });
       return;
@@ -320,7 +334,11 @@ export function createRetentionPruneLoop(deps: RetentionPruneLoopDeps): () => Pr
       }
     } catch (error) {
       deps.alerts.failed();
-      console.warn("retention prune failed:", error instanceof Error ? error.message : String(error));
+      // D5: the sweep runs raw SQL over chat/audit/operation tables, so a
+      // driver message here is exactly the class of text that can quote schema
+      // and row context. The counted alert above is the operator signal; this
+      // line only says which KIND of failure produced it.
+      console.warn(`retention prune failed: ${classifyLoggableError(error)}`);
     } finally {
       pruning = false;
       if (continueBacklog) schedule(() => { void prune(); });
@@ -571,12 +589,17 @@ export async function start(): Promise<void> {
   });
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
+  // Both crash handlers receive a value from an ARBITRARY call site — including
+  // a rejected Clockify request, whose message embeds the workspace-scoped path
+  // and up to 200 bytes of host response body (`clockify/rest/core.ts`). The
+  // classification is what the runbook alerts on; the stack is not recoverable
+  // from either form, so nothing operable is lost by refusing the message.
   process.once("unhandledRejection", (reason) => {
-    console.error("unhandledRejection:", reason instanceof Error ? reason.message : String(reason));
+    console.error(`unhandledRejection: ${classifyLoggableError(reason)}`);
     shutdown("unhandledRejection", 1);
   });
   process.once("uncaughtException", (error) => {
-    console.error("uncaughtException:", error.message);
+    console.error(`uncaughtException: ${classifyLoggableError(error)}`);
     shutdown("uncaughtException", 1);
   });
 }
@@ -584,7 +607,16 @@ export async function start(): Promise<void> {
 // Run only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void start().catch((error: unknown) => {
-    console.error("startup failed:", error instanceof Error ? error.message : String(error));
+    // Uniform with every other sink, but NOT at the cost of the boot
+    // diagnostic. Measured against the real schema (zod 3.25): a missing or
+    // too-short variable reports only `path` and a bound, while an
+    // `invalid_enum_value` issue echoes the rejected value verbatim — and this
+    // schema reads `SESSION_SECRET`, `DATA_ENCRYPTION_KEY` and `LLM_API_KEY`
+    // out of the same object. So the message stays refused, and `config.ts`
+    // instead publishes the issue PATHS on the declared-safe channel: this
+    // line reads `startup failed: name=ZodError issues=SESSION_SECRET`, which
+    // names the variable without quoting one byte of its value.
+    console.error(`startup failed: ${classifyLoggableError(error)}`);
     process.exitCode = 1;
   });
 }

@@ -376,8 +376,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // change has ALREADY happened on the host. A transient DB error here (e.g.
       // a microsecond SQLITE_BUSY) must NOT throw the turn — that would 502
       // (agentic) / 500 (single-turn), drop the committed receipt, and invite a
-      // duplicate write. Mirror the confirm-tail fix: log (message only, no
-      // secrets) and still emit the receipt for the change that already ran.
+      // duplicate write. Mirror the confirm-tail fix: log a fixed line carrying
+      // NO error detail, and still emit the receipt for the change that already
+      // ran.
       const status: ActionResultKind = receipt.ok
         ? "succeeded"
         : receipt.code === "commit_outcome_unknown"
@@ -718,8 +719,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // (e.g. a microsecond SQLITE_BUSY) must NOT throw the turn — that would 502
     // (agentic) / 500 (single-turn) a turn whose change already happened, dropping
     // the committed receipt and inviting a duplicate write. Mirror the safe-write
-    // (auditAndEmitReceipt) and confirm-tail isolation: log (message only, no
-    // secrets) and continue so the receipt/reply still reaches the admin.
+    // (auditAndEmitReceipt) and confirm-tail isolation: log a fixed line carrying
+    // NO error detail and continue so the receipt/reply still reaches the admin.
     try {
       deps.store.addMessage({
         sessionId: claims.sessionId,

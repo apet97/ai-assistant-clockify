@@ -1,5 +1,6 @@
 import type { ActionContext, ActionResult, AtomicIdempotencyLedger, ConfirmableOperation, ExternalMutationPlan } from "../harness/action.js";
 import { isPartialCommitResult } from "../harness/action.js";
+import { classifyLoggableError } from "../log-error-class.js";
 import type { ActionOrigin, RegistryId } from "../harness/action-discriminators.js";
 import {
   accessDeniedMessage,
@@ -442,8 +443,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     }
     if (!resultRef) {
       console.error(
-        "undo settlement persistence degraded (reversal already dispatched; receipt preserved):",
-        settlementError instanceof Error ? settlementError.message : String(settlementError),
+        `undo settlement persistence degraded (reversal already dispatched; receipt preserved): ${classifyLoggableError(settlementError)}`,
       );
     }
 
@@ -555,8 +555,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     }
     if (!resultRef) {
       console.error(
-        "canonical action-result persistence degraded (change already applied; receipt preserved):",
-        settlementError instanceof Error ? settlementError.message : String(settlementError),
+        `canonical action-result persistence degraded (change already applied; receipt preserved): ${classifyLoggableError(settlementError)}`,
       );
     }
 
