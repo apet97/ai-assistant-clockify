@@ -39,6 +39,38 @@ export function requiredArgumentsFromSchema(schema: z.ZodTypeAny): readonly stri
  * action's normalized registry entry carries `referenceSelector`. The
  * underlying action Zod schema is untouched and (being closed/strict) still
  * rejects `referenceId`; resolution must strip it before Zod validation runs.
+ *
+ * ── THE DOUBLE LOCK (C5) ───────────────────────────────────────────────────
+ * The entity-reference vertical is DORMANT, and it is held dormant by two
+ * independent locks. Neither may be removed without funding the whole feature:
+ *
+ *   LOCK 1 — nothing calls this function. `actionParametersSchemaWithReference`
+ *     has zero callers; both live tool builders (`toolsForModel`,
+ *     `discoveryToolsForLoadedSet`, tools.ts:60,:86) call the plain
+ *     `actionParametersSchema`, so `referenceId` is never advertised to a
+ *     model. This is deliberate — closure-plan PR 10 (F09) removed the
+ *     advertisement because offering it made the model invoke a feature that
+ *     always failed validation.
+ *   LOCK 2 — nothing writes a reference. `upsertEntityReference` has no
+ *     production caller, so the `entity_references` table is reachable in
+ *     production for DELETE only (retention.ts, installations.ts erasure).
+ *     Even if LOCK 1 were lifted, every resolution would miss.
+ *
+ * DECISION 2026-07-31 (owner, Phase C task C5): KEEP DORMANT — not funded for
+ * this release. Storage and the `referenceSelector` metadata stay compatible
+ * so the feature can be funded later WITHOUT a migration, and no catalog-hash
+ * event is spent on retiring it before the release evidence run. Retiring it
+ * fully (deleting this function, the four dormant Store methods, the table via
+ * a v14 migration, and `referenceSelector` from the fingerprint contract at
+ * catalog.ts:211) would move every action fingerprint and the catalog hash, so
+ * it must be scheduled as a regeneration event before any evidence run — never
+ * between two. Revisit after launch.
+ *
+ * What is GONE (C5) is the plumbing that pretended to carry a reference at
+ * runtime: the clarification candidate's never-set `referenceId` field and the
+ * permanently-false forward that copied it into a run event. Because the
+ * module stays, `src/assistant-v2/references/entity-reference.ts` remains an
+ * intentional orphan and is allowlisted by name in the C7 orphan gate.
  */
 export function actionParametersSchemaWithReference(
   schema: z.ZodTypeAny,

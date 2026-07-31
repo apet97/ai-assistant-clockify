@@ -15,7 +15,6 @@ export interface ClarificationCandidate {
   optionId: string;
   externalId: string;
   label: string;
-  referenceId?: string;
 }
 
 export interface CreatePendingClarificationInput extends ClarificationScope {

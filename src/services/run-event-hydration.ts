@@ -131,11 +131,10 @@ function hydrateAttachment(
         question,
         missingField: row.missingField,
         // Never `externalId`, never `partialArguments` — display data only.
-        candidates: row.candidates.map(({ optionId, label, referenceId }) => ({
-          optionId,
-          label,
-          ...(referenceId ? { referenceId } : {}),
-        })),
+        // C5: no `referenceId` forward. The entity-reference vertical is
+        // dormant behind a double lock (see harness/tool-schema.ts), so a
+        // candidate never carried one and the spread was permanently false.
+        candidates: row.candidates.map(({ optionId, label }) => ({ optionId, label })),
         expiresAt: row.expiresAt,
       };
     }
