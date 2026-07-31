@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { executeAction } from "../../src/harness/actions.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { getAction, catalogForModel } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
+import { buildSystemPrompt } from "../../src/assistant/prompts.js";
 import type { ActionContext } from "../../src/harness/action.js";
 
 const NOW = new Date("2026-06-10T12:00:00.000Z");
@@ -49,6 +52,38 @@ describe("assistant_recent_outcomes — recap answers come from the AUDIT LOG, n
     expect(metrics.confirmations).toMatchObject({ previewed: 2, confirmed: 1, cancelled: 1 });
     // The window defaults to the last 24h, resolved server-side from ctx.now.
     expect(sinceArgs[0]).toBe(new Date(NOW.getTime() - 24 * 3_600_000).toISOString());
+  });
+
+  /**
+   * D2 defect 4: splitting `outcomeUnknown` out of `failed` narrowed the number
+   * the model reports for "what failed today". Ambiguous writes must not simply
+   * vanish from a recap — the model has to be told the key exists and what it
+   * means, or the split silently hides dispatched-but-unconfirmed writes.
+   */
+  it("surfaces ambiguous writes separately from failures, and tells the model about them", async () => {
+    const context = makeContext({
+      recentOutcomes: () => ({
+        outcomes: [],
+        confirmationStatuses: ["definitive_failed", "outcome_unknown", "outcome_unknown"],
+      }),
+    });
+    const result = await executeAction({ actionName: "assistant_recent_outcomes", args: {}, context });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    const metrics = (result.receipt.data as { metrics: { confirmations: Record<string, number> } }).metrics;
+    // Ambiguity is no longer folded into `failed` — and is not dropped either.
+    expect(metrics.confirmations.failed).toBe(1);
+    expect(metrics.confirmations.outcomeUnknown).toBe(2);
+
+    // The model only ever sees this JSON plus the action description and the
+    // prompt rule, so BOTH must name the key it now has to report.
+    const description = getAction("assistant_recent_outcomes")!.description;
+    expect(description).toContain("outcomeUnknown");
+    expect(description).toContain("verification");
+    const prompt = buildSystemPrompt({
+      actionCatalog: catalogForModel(INTERNAL_ACTION_CATALOG),
+      policy: defaultAdminPolicy(),
+    });
+    expect(prompt).toContain("confirmations.outcomeUnknown");
   });
 
   it("honors an explicit sinceHours window", async () => {

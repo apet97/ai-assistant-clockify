@@ -1,5 +1,4 @@
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
-import type { WorkspaceClient } from "../../src/clockify/client.js";
 import { TYPED_CONSENT } from "../../src/routes/consent-guard.js";
 import {
   buildWriteSafetyEvalCases,
@@ -8,9 +7,10 @@ import {
   type WriteSafetyInvariant,
 } from "../../scripts/eval-v2/write-safety-cases.js";
 import type { WriteSafetyObservation } from "../../scripts/eval-write-safety.js";
-import { FAKE_MUTATION_METHOD_PATTERN, type FakeWorkspaceSeed } from "./fake-clockify.js";
+import { type FakeWorkspaceSeed } from "./fake-clockify.js";
 import { isAddonUnavailableWrite, mutationCallTotal } from "./v2-write-parity.js";
 import {
+  ambiguousDispatchClient,
   confirmationServiceFor,
   prepareWriteOnce,
   rotateConfirmationNonce,
@@ -81,27 +81,6 @@ function createLedger(): InvariantLedger {
 function violationCodeFrom(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `flow_error_${message.slice(0, 80).replace(/[^a-zA-Z0-9_]+/g, "_")}`;
-}
-
-/** Wrap the fake host so every mutation-pattern port call fails AFTER dispatch
- * begins — the transport-ambiguity case. Reads pass through untouched. */
-function ambiguousDispatchClient(client: WorkspaceClient, onAttempt: () => void): WorkspaceClient {
-  return new Proxy(client, {
-    get(target, property, receiver) {
-      const value = Reflect.get(target, property, receiver);
-      if (
-        typeof property === "string" &&
-        typeof value === "function" &&
-        FAKE_MUTATION_METHOD_PATTERN.test(property)
-      ) {
-        return async () => {
-          onAttempt();
-          throw new Error("injected ambiguous transport failure");
-        };
-      }
-      return value;
-    },
-  }) as WorkspaceClient;
 }
 
 /** Append the hostile marker through the same argument channels the parity

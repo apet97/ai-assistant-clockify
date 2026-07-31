@@ -31,17 +31,33 @@ describe("buildMetrics", () => {
   });
 
   it("summarizes durable confirmation outcomes", () => {
-    // Only statuses the store actually produces: succeeded / cancelled / definitive_failed /
-    // pending, plus the 'expired' the store derives for a lapsed pending row.
-    const m = buildMetrics([], ["succeeded", "succeeded", "cancelled", "expired", "definitive_failed", "pending"], "t");
+    // Every terminal PendingStatus (src/harness/confirmations.ts) plus 'pending',
+    // including the two this case previously omitted — 'partial' (a retained
+    // partial commit, which counts as confirmed) and 'outcome_unknown'. The
+    // non-terminal 'executing' is deliberately absent: it lands in no bucket but
+    // 'previewed', so the buckets below do NOT sum to previewed in general.
+    const m = buildMetrics(
+      [],
+      ["succeeded", "partial", "cancelled", "expired", "definitive_failed", "outcome_unknown", "pending"],
+      "t",
+    );
     expect(m.confirmations).toEqual({
-      previewed: 6,
+      previewed: 7,
       confirmed: 2,
       cancelled: 1,
       expired: 1,
       failed: 1,
+      outcomeUnknown: 1,
       pending: 1,
     });
+  });
+
+  it("counts an ambiguous confirmation apart from a definitive failure", () => {
+    // The fold this replaced reported both as `failed`, so an operator could not
+    // tell "Clockify rejected it" from "we do not know whether it applied".
+    const m = buildMetrics([], ["definitive_failed", "outcome_unknown", "outcome_unknown"], "t");
+    expect(m.confirmations.failed).toBe(1);
+    expect(m.confirmations.outcomeUnknown).toBe(2);
   });
 
   it("handles an empty system (no actions, no confirmations)", () => {

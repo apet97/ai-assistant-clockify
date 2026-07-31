@@ -92,6 +92,7 @@ import type { SuccessReceipt } from "../harness/receipts.js";
 import type { ClaimState, CommitResult } from "../harness/action.js";
 import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
 import type { MutationStepJournal } from "../harness/mutation-contract.js";
+import { logOutcomeUnknownRecovered } from "../log-outcome-unknown.js";
 
 /**
  * The single SQLite access module (backend rule: all DB access goes through
@@ -613,7 +614,7 @@ export interface Store {
   mutationStepJournal(operationId: string): MutationStepJournal;
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
   getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
-  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number; assistantRuns: number };
+  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number; assistantRuns: number; ambiguousSteps: number; ambiguousOperations: number };
   recordActionResult(input: {
     workspaceId: string;
     adminUserId: string;
@@ -1495,11 +1496,16 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
               SET status = 'definitive_failed', settled_at = ?, updated_at = ?
             WHERE status = 'executing' AND dispatched_at IS NULL`,
         ).run(timestamp, timestamp);
-        db.prepare(
+        // DEPLOYMENT.md names THIS as what produces ambiguity after a restore:
+        // "only steps whose durable evidence says dispatch began become
+        // outcome_unknown". Count it directly — a stranded host effect must be
+        // reportable even if its parent row is already terminal, which parent
+        // settlement counts alone would miss.
+        const ambiguousSteps = db.prepare(
           `UPDATE operation_steps
               SET status = 'outcome_unknown', settled_at = ?, updated_at = ?
             WHERE status = 'executing' AND dispatched_at IS NOT NULL`,
-        ).run(timestamp, timestamp);
+        ).run(timestamp, timestamp).changes;
 
         const operationWasDispatched = (operationId: string): boolean =>
           (db.prepare(
@@ -1577,6 +1583,12 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           action_name: string;
         }>;
         let operations = 0;
+        // Parent rows this pass settled as AMBIGUOUS specifically, as distinct
+        // from the queued work it fails definitively (`operations`/`undos` mix
+        // both kinds). Reported alongside ambiguousSteps rather than summed:
+        // one stranded effect normally settles BOTH a step and its parent, so a
+        // single total would double-count it.
+        let ambiguousOperations = 0;
         for (const row of confirmationRows) {
           const recoveryKind = operationWasDispatched(row.operation_id) ? "outcome_unknown" : "definitive_failed";
           const ref = operationResult(row.operation_id) ?? insertRecoveryResult(row, row.operation_id, recoveryKind);
@@ -1587,11 +1599,13 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
                     idempotency_key = NULL
               WHERE id = ? AND status = 'executing'`,
           ).run(ref.kind, ref.id, actionResultJson(ref.summary), row.id);
-          operations += db.prepare(
+          const settled = db.prepare(
             `UPDATE operation_runs
                 SET status = ?, action_result_id = ?, updated_at = ?
               WHERE id = ? AND status = 'executing'`,
           ).run(ref.kind, ref.id, timestamp, row.operation_id).changes;
+          operations += settled;
+          if (recoveryKind === "outcome_unknown") ambiguousOperations += settled;
           if (row.idempotency_key) {
             db.prepare(
               `UPDATE idempotency_keys
@@ -1639,11 +1653,13 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         for (const row of linkedUndoRows) {
           const recoveryKind = operationWasDispatched(row.operation_id) ? "outcome_unknown" : "definitive_failed";
           const ref = operationResult(row.operation_id) ?? insertRecoveryResult(row, row.operation_id, recoveryKind);
-          operations += db.prepare(
+          const settledOperation = db.prepare(
             `UPDATE operation_runs
                 SET status = ?, action_result_id = ?, updated_at = ?
               WHERE id = ? AND status = 'executing'`,
           ).run(ref.kind, ref.id, timestamp, row.operation_id).changes;
+          operations += settledOperation;
+          if (recoveryKind === "outcome_unknown") ambiguousOperations += settledOperation;
           undos += db.prepare(
             `UPDATE undo_records
                 SET status = ?, action_result_id = ?,
@@ -1672,11 +1688,13 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         for (const row of standaloneOperations) {
           const recoveryKind = operationWasDispatched(row.id) ? "outcome_unknown" : "definitive_failed";
           const ref = operationResult(row.id) ?? insertRecoveryResult(row, row.id, recoveryKind);
-          operations += db.prepare(
+          const settled = db.prepare(
             `UPDATE operation_runs
                 SET status = ?, action_result_id = ?, updated_at = ?
               WHERE id = ? AND status = 'executing'`,
           ).run(ref.kind, ref.id, timestamp, row.id).changes;
+          operations += settled;
+          if (recoveryKind === "outcome_unknown") ambiguousOperations += settled;
         }
         const undoRows = db.prepare(
           `SELECT id, session_id, workspace_id, admin_user_id
@@ -1689,12 +1707,15 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         }>;
         for (const row of undoRows) {
           const ref = insertRecoveryResult({ ...row, action_name: "undo" });
-          undos += db.prepare(
+          // This standalone pass settles unconditionally as outcome_unknown.
+          const settled = db.prepare(
             `UPDATE undo_records
                 SET status = 'outcome_unknown', action_result_id = ?,
                     result_summary_json = ?, undone_at = ?
               WHERE id = ? AND status = 'executing'`,
           ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
+          undos += settled;
+          ambiguousOperations += settled;
         }
         const confirmations = confirmationRows.length;
         const executingBatches = db.prepare(
@@ -1744,7 +1765,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
                 )`,
           ).run(timestamp, timestamp);
         }
-        return { turns, operations, confirmations, undos, assistantRuns };
+        return { turns, operations, confirmations, undos, assistantRuns, ambiguousSteps, ambiguousOperations };
       })();
     },
 
@@ -1753,7 +1774,16 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     },
   };
 
-  store.recoverOrphanedRuns();
+  // DEPLOYMENT.md ("Required alerts") requires alerting on operation
+  // `outcome_unknown`, and names restart/restore recovery as what produces it.
+  // Recovery is the one producer with no request context, so it reports here.
+  const recovered = store.recoverOrphanedRuns();
+  if (recovered.ambiguousSteps > 0 || recovered.ambiguousOperations > 0) {
+    logOutcomeUnknownRecovered({
+      steps: recovered.ambiguousSteps,
+      operations: recovered.ambiguousOperations,
+    });
+  }
 
   return store;
 }

@@ -35,6 +35,7 @@ import { withMutationPlanScope } from "../clockify/rest/core.js";
 import { HostCallBudgetExceededError } from "../clockify/request-governor.js";
 import { bindMutationPlanHostCalls } from "./safety-limits.js";
 import { validateWriteAuthorityOperation } from "./write-authority.js";
+import { logOutcomeUnknown } from "../log-outcome-unknown.js";
 
 /**
  * Action executor — the safety boundary (ARCHITECTURE "The model can propose.
@@ -440,7 +441,7 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
             mutationJournal: input.context.operationJournal.scope(operationId),
           }
         : input.context;
-      if (!boundedPrepared) return settleImmediateOperation(input.context, operationId, invalidSafeWritePreparation(action.name));
+      if (!boundedPrepared) return settleImmediateOperation(input.context, action.name, operationId, invalidSafeWritePreparation(action.name));
       const executed = executionContext.mutationJournal
         ? await withMutationPlanScope({
             actionName: action.name,
@@ -455,11 +456,11 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
       const result: ActionResult = isPartialCommitResult(executed)
         ? executed
         : { kind: "receipt", receipt: executed };
-      return settleImmediateOperation(input.context, operationId, result);
+      return settleImmediateOperation(input.context, action.name, operationId, result);
     } catch (error) {
       if (error instanceof OperationPreparationError) operationId = error.operationId;
       const result: ActionResult = { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
-      return settleImmediateOperation(input.context, operationId, result);
+      return settleImmediateOperation(input.context, action.name, operationId, result);
     }
   }
 
@@ -491,7 +492,14 @@ function unclassifiedAction(actionName: string): ActionResult {
   };
 }
 
-function settleImmediateOperation(ctx: ActionContext, operationId: string | undefined, result: ActionResult): ActionResult {
+function settleImmediateOperation(
+  ctx: ActionContext,
+  actionName: string,
+  operationId: string | undefined,
+  result: ActionResult,
+): ActionResult {
+  // No operation id means no journal, hence no join key for an operator line —
+  // an unjournaled immediate write that ends ambiguous is not reported here.
   if (!operationId || !ctx.operationJournal) return result;
   const status = result.kind === "partial"
     ? "partial"
@@ -500,6 +508,10 @@ function settleImmediateOperation(ctx: ActionContext, operationId: string | unde
       : result.kind === "receipt" && !result.receipt.ok && result.receipt.code === "commit_outcome_unknown"
         ? "outcome_unknown"
         : "definitive_failed";
+  // No `workspace=` here: the harness holds no session secret, and threading one
+  // down just to alias a log line would widen the safety boundary's inputs. The
+  // route-level seams (confirmation-service, control-plane) carry the alias.
+  if (status === "outcome_unknown") logOutcomeUnknown({ action: actionName, operationId });
   try {
     ctx.operationJournal.settle(operationId, status, result);
   } catch (error) {

@@ -69,6 +69,8 @@ import {
 } from "./chat-results.js";
 import { IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
 import { bestEffort } from "./best-effort.js";
+import { logOutcomeUnknown } from "../log-outcome-unknown.js";
+import { logAlias } from "../log-alias.js";
 import {
   createWorkspaceMutationCoordinator,
   WorkspaceMutationRevokedError,
@@ -487,6 +489,13 @@ export function createControlPlane(deps: AppDeps): ControlPlane {
       : receipt.code === "commit_outcome_unknown"
         ? "outcome_unknown"
         : "definitive_failed";
+    if (terminalStatus === "outcome_unknown") {
+      logOutcomeUnknown({
+        action: operation.actionName,
+        operationId: record.operationId,
+        workspaceAlias: logAlias(deps.config.sessionSecret, "workspace", claims.workspaceId),
+      });
+    }
     let resultRef: ActionResultRef | undefined;
     let settlementError: unknown;
     for (let attempt = 0; attempt < 2 && !resultRef; attempt += 1) {

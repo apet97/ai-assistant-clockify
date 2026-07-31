@@ -6,7 +6,11 @@ import { createConfirmationService } from "../../src/services/confirmation-servi
 import { createWorkspaceMutationCoordinator } from "../../src/clockify/workspace-mutation-coordinator.js";
 import { computeRequestHash } from "../../src/assistant-v2/state.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
-import { createFakeWorkspace, type FakeWorkspaceSeed } from "./fake-clockify.js";
+import {
+  createFakeWorkspace,
+  FAKE_MUTATION_METHOD_PATTERN,
+  type FakeWorkspaceSeed,
+} from "./fake-clockify.js";
 import {
   SESSION_SECRET,
   WRITE_PARITY_NOW,
@@ -137,6 +141,27 @@ export function confirmationServiceFor(
     mutationCoordinator: createWorkspaceMutationCoordinator(),
     recordUndoIfReversible: () => undefined,
   });
+}
+
+/** Wrap the fake host so every mutation-pattern port call fails AFTER dispatch
+ * begins — the transport-ambiguity case. Reads pass through untouched. */
+export function ambiguousDispatchClient(client: WorkspaceClient, onAttempt: () => void): WorkspaceClient {
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (
+        typeof property === "string" &&
+        typeof value === "function" &&
+        FAKE_MUTATION_METHOD_PATTERN.test(property)
+      ) {
+        return async () => {
+          onAttempt();
+          throw new Error("injected ambiguous transport failure");
+        };
+      }
+      return value;
+    },
+  }) as WorkspaceClient;
 }
 
 /** Non-asserting nonce rotation mirroring the session-restore re-arm path. */

@@ -32,6 +32,8 @@ import type { WorkspaceMutationCoordinator, WorkspaceMutationLease } from "../cl
 import { WorkspaceMutationRevokedError } from "../clockify/workspace-mutation-coordinator.js";
 import { IDEMPOTENCY_WINDOW_MS } from "../routes/chat-constants.js";
 import type { WriteAuthorityOutcome } from "../routes/route-authority.js";
+import { logOutcomeUnknown } from "../log-outcome-unknown.js";
+import { logAlias } from "../log-alias.js";
 
 export type ConfirmSingleOutcome =
   | { ok: false; status: number; body: { ok: false; code: string; message: string } }
@@ -417,6 +419,18 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     );
     const { receipt, remaining, status: undoStatus } = undo;
 
+    // An ambiguous undo settles operation_runs to 'outcome_unknown' too
+    // (db/store/undo.ts), but undo rows are not pending_confirmations, so it is
+    // invisible to both the confirmation metric and dispatchConfirmedPreview.
+    // A half-reversed creation is exactly what an operator must go verify.
+    if (undoStatus === "outcome_unknown") {
+      logOutcomeUnknown({
+        action: "undo",
+        operationId,
+        workspaceAlias: logAlias(deps.sessionSecret, "workspace", claims.workspaceId),
+      });
+    }
+
     let resultRef: ActionResultRef | undefined;
     let settlementError: unknown;
     for (let attempt = 0; attempt < 2 && !resultRef; attempt += 1) {
@@ -515,6 +529,15 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
         : receipt.code === "commit_outcome_unknown"
           ? "outcome_unknown"
           : "definitive_failed";
+    // Both confirmSingle and confirmBatch dispatch through here, so this is the
+    // one seam that observes every confirmed (risky) ambiguous write.
+    if (terminalStatus === "outcome_unknown") {
+      logOutcomeUnknown({
+        action: operation.actionName,
+        operationId: record.operationId,
+        workspaceAlias: logAlias(deps.sessionSecret, "workspace", claims.workspaceId),
+      });
+    }
 
     let resultRef: ActionResultRef | undefined;
     let settlementError: unknown;

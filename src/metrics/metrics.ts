@@ -31,7 +31,14 @@ export interface ConfirmationMetric {
   confirmed: number;
   cancelled: number;
   expired: number;
+  /** Clockify definitively rejected the write — nothing was applied. */
   failed: number;
+  /**
+   * Dispatched, but the host never proved whether it applied (D2). Previously
+   * folded into `failed`, which made "rejected" and "we don't know" the same
+   * number; they need different operator responses, so they are counted apart.
+   */
+  outcomeUnknown: number;
   pending: number;
 }
 
@@ -75,12 +82,15 @@ export function buildMetrics(
     .sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
 
   const count = (status: string): number => confirmationStatuses.filter((s) => s === status).length;
+  // The terminal buckets are disjoint and do NOT sum to `previewed`: the
+  // non-terminal 'executing' status is counted only by `previewed`.
   const confirmations: ConfirmationMetric = {
     previewed: confirmationStatuses.length,
     confirmed: count("succeeded") + count("partial"),
     cancelled: count("cancelled"),
     expired: count("expired"),
-    failed: count("definitive_failed") + count("outcome_unknown"),
+    failed: count("definitive_failed"),
+    outcomeUnknown: count("outcome_unknown"),
     pending: count("pending"),
   };
 

@@ -678,7 +678,7 @@ const recentOutcomes = defineReadAction({
   ...ADMIN_API_METADATA.assistant_recent_outcomes,
   name: "assistant_recent_outcomes",
   description:
-    "Summarize what the assistant actually DID, from the audited action outcomes: per-action success/failure counts, error codes, and confirm/cancel rates. Use this to answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\" — never answer activity-recap questions from chat memory.",
+    "Summarize what the assistant actually DID, from the audited action outcomes: per-action success/failure counts, error codes, and confirm/cancel rates. Use this to answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\" — never answer activity-recap questions from chat memory. In the result, `confirmations.failed` counts DEFINITIVE rejections only, while `confirmations.outcomeUnknown` counts writes that were sent but never confirmed applied: report a non-zero `outcomeUnknown` separately as needing verification in Clockify — never as failed, and never by omitting it.",
   group: "workspace_settings",
   schema: z
     .object({
