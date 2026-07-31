@@ -16,7 +16,7 @@ import {
   createEmptyRunBudget,
   isTerminalPhase,
 } from "./state.js";
-import { discoveryToolsForLoadedSet } from "../harness/tools.js";
+import { toolsForV2LoadedSet } from "../harness/tools.js";
 import { formatObservations, summarizeActionResultForModel, type RunObservation } from "./observations.js";
 import { createRunService, scopedRun } from "../services/run-service.js";
 import {
@@ -176,7 +176,12 @@ export async function runAssistantV2(
       [...resumeSummaries, ...formatObservations(observations)],
       adminFollowUp,
     );
-    const tools = discoveryToolsForLoadedSet(deps.actionRegistry, new Set(state.loadedToolNames));
+    // C2: the GUARDED builder. `initialV2ToolSet` asserts `registry.id ===
+    // "v2-api"` but only on the fresh-run branch, leaving every resumed
+    // iteration's tool build unchecked. `toolsForV2LoadedSet` is
+    // assert-then-delegate — byte-identical output for every input this
+    // runner can produce — so wiring it costs nothing and closes that gap.
+    const tools = toolsForV2LoadedSet(deps.actionRegistry, new Set(state.loadedToolNames));
     let completion;
     try {
       ({ completion } = await runs.callModel(state, messages, tools, modelCall, input.signal));

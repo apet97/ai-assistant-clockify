@@ -12,6 +12,8 @@ import {
   validateLoadedToolCall,
 } from "../../src/assistant-v2/discovery/api-search-tool.js";
 import {
+  INTERNAL_ACTION_CATALOG,
+  LOCAL_ASSISTANT_ACTIONS,
   LOCAL_ASSISTANT_TOOL_NAMES,
   MODEL_API_ACTION_CATALOG,
 } from "../../src/harness/api-catalog.js";
@@ -165,6 +167,20 @@ describe("toolsForV2LoadedSet", () => {
       "clockify_projects_list",
     ]);
     expect(toolsForModel(MODEL_API_ACTION_CATALOG).length).toBeGreaterThan(tools.length);
+  });
+
+  /**
+   * C2: this is the assertion the runner now relies on every iteration.
+   * Until C2 the runner called the UNGUARDED `discoveryToolsForLoadedSet`,
+   * so `initialV2ToolSet`'s registry-id guard protected only the fresh-run
+   * branch and the throw string below was pinned nowhere.
+   */
+  it("refuses a registry that is not the v2 model-API surface", () => {
+    const loaded = initialV2ToolSet(MODEL_API_ACTION_CATALOG, ["clockify_projects_list"]);
+    expect(() => toolsForV2LoadedSet(INTERNAL_ACTION_CATALOG, loaded))
+      .toThrow("tools_for_v2_loaded_set_registry_required:v2-api");
+    expect(() => toolsForV2LoadedSet(LOCAL_ASSISTANT_ACTIONS, loaded))
+      .toThrow("tools_for_v2_loaded_set_registry_required:v2-api");
   });
 
   it("never returns local assistant actions as API endpoints", () => {
