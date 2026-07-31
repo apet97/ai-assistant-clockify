@@ -23,8 +23,10 @@ This capsule is current truth, not a PR chronology.
   the live remote, candidate, and checks with the preflight in `AGENTS.md`; never
   freeze their transient status into this file.
 - `ASSISTANT_ENGINE` is the sole runtime switch. Unspecified configuration
-  defaults to v1 fail-safe; deployed `ad06c08` explicitly selects v2. V1 remains
-  in-tree for rollback only.
+  now defaults to **v2** (C11, owner decision 2026-07-31); `ASSISTANT_ENGINE=v1`
+  is the tested rollback. Deployed `ad06c08` selects v2 explicitly, so the
+  default change does not alter what production serves. V1 remains in-tree for
+  rollback only.
 - The cutover record correctly preserves the fresh database's initial
   `409 not installed` state. Reinstall subsequently completed: an aliased
   production lifecycle log records `installed` at `2026-07-30T02:47:41Z`,
@@ -271,8 +273,9 @@ bug was found against the REAL API, not by reading the code.
 - If a safety test fails, stop and fix it before features.
 - [`ADR 001`](./docs/adr/001-api-agent-v2.md) is the accepted v2 architecture
   contract. V2 coexists under `src/assistant-v2/`; `ASSISTANT_ENGINE=v1|v2` is the
-  sole switch. Unspecified configuration defaults to v1 fail-safe, while the
-  deployed `ad06c08` cutover explicitly selects v2.
+  sole switch. Unspecified configuration defaults to **v2** (C11); the deployed
+  `ad06c08` cutover selects v2 explicitly, and `ASSISTANT_ENGINE=v1` is the
+  tested rollback.
   During coexistence, v1 accepts only critical safety, production, and verified Clockify-contract fixes.
 
 ## Architecture

@@ -34,9 +34,12 @@ describe("loadConfig", () => {
     expect(cfg.llmModel).toBe("deepseek-v4-pro");
   });
 
-  it("defaults ASSISTANT_ENGINE to v1, accepts exact engines, and rejects other values", () => {
+  it("defaults ASSISTANT_ENGINE to v2, accepts exact engines, and rejects other values", () => {
     const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
-    expect(loadConfig(base).assistantEngine).toBe("v1");
+    // C11: "absent" and "explicit v1" were the SAME assertion while the default
+    // was v1. They are two different claims now, so both arms are pinned — the
+    // new default, and the rollback that must keep working.
+    expect(loadConfig(base).assistantEngine).toBe("v2");
     expect(loadConfig({ ...base, ASSISTANT_ENGINE: "v1" }).assistantEngine).toBe("v1");
     expect(loadConfig({ ...base, ASSISTANT_ENGINE: "v2" }).assistantEngine).toBe("v2");
     expect(() => loadConfig({ ...base, ASSISTANT_ENGINE: "V1" })).toThrow();

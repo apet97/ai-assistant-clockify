@@ -141,7 +141,12 @@ const envObjectSchema = z.object({
   // (it uses the authenticated CLI), so these are optional here and enforced
   // below only for the http provider.
   LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
-  ASSISTANT_ENGINE: z.enum(["v1", "v2"]).default("v1"),
+  // C11 (owner decision 2026-07-31): the default is v2. Production already
+  // selects v2 explicitly, so this changes only what an UNSPECIFIED
+  // configuration does. `ASSISTANT_ENGINE=v1` remains the tested rollback and
+  // the enum stays two-valued — narrowing it is the LAST step of v1
+  // retirement (see docs/V1_RETIREMENT_SEQUENCE.md), never a side effect here.
+  ASSISTANT_ENGINE: z.enum(["v1", "v2"]).default("v2"),
   LLM_MODE: z.enum(["tool", "json"]).default("tool"),
   // Default ON: the durable agentic loop is the proven default (live PASS=10,
   // adversarial review all-HELD). LLM_AGENTIC=0 is the instant rollback.
