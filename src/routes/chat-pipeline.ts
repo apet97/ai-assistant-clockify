@@ -14,46 +14,39 @@
  * This module must NOT import from `./api.js` (that would create a cycle); the
  * shared constants live in `./chat-constants.js` and the pure transforms in
  * `./chat-results.js`. `api.ts` imports FROM here.
+ *
+ * C10: the ENGINE-NEUTRAL half of this file now lives in `./control-plane.ts`
+ * (the authority quartet, both rate limiters, `newChatAllowed`,
+ * `chatPreconditions`, `commitConfirmation`, `recordUndoIfReversible`, and the
+ * shared `ChatPipeline`/`ChatTurnOutcome`/`ChatPreconditions`/
+ * `CommitConfirmationOutcome` types), because v2 needs exactly those and must
+ * not import this module. What remains here is v1-ONLY: the planner turn, the
+ * agentic loop plumbing, and the durable resume. This file destructures the
+ * control plane's raw handles rather than reconstructing them, so v1 keeps ONE
+ * chatLimiter and ONE createRouteAuthority.
  */
-import type { Request, Response } from "express";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
-  createSlidingWindowLimiter,
-  DEFAULT_CHAT_RATE_LIMIT_MAX,
-  DEFAULT_CHAT_RATE_LIMIT_WINDOW_MS,
-  DEFAULT_NEW_CHAT_RATE_LIMIT_MAX,
-  DEFAULT_NEW_CHAT_RATE_LIMIT_WINDOW_MS,
-  type RateLimitDecision,
-} from "./rate-limit.js";
-import {
-  accessDeniedMessage,
-  commitConfirmedOperation,
   executeAction,
 } from "../harness/actions.js";
 import {
-  isPartialCommitResult,
   OperationPreparationError,
   type ActionContext,
   type ActionResult,
-  type CommitResult,
   type ConfirmableOperation,
   type PreviewCard,
 } from "../harness/action.js";
-import type { AtomicIdempotencyLedger } from "../harness/idempotency.js";
-import { reversibleCreations } from "../harness/undo.js";
 import { actionFingerprint, catalogForModel, catalogHash, getAction } from "../harness/catalog.js";
 import { INTERNAL_ACTION_CATALOG } from "../harness/api-catalog.js";
 import { actionStatusLabel } from "../harness/action-labels.js";
-import { canWrite, type AdminPolicy } from "../harness/permissions.js";
+import { type AdminPolicy } from "../harness/permissions.js";
 import {
-  confirmPending,
   createPendingConfirmation,
   hashOperation,
-  rotatePendingNonce,
 } from "../harness/confirmations.js";
 import { errorReceipt, hasChanges, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import { runAgentTurn, type AgentStep, type AgentTurnResult } from "../assistant/agent-loop.js";
-import { parseAgentState, resumeMessages, type AgentState } from "../assistant/agent-state.js";
+import { resumeMessages, type AgentState } from "../assistant/agent-state.js";
 import {
   canonicalIntentAuthoredSource,
   declareIntentCapability,
@@ -73,13 +66,11 @@ import { isNewProjectSetupRequest, selectActionsForMessage } from "../harness/to
 import type { Installation, IntentCapabilityRecord } from "../db/store.js";
 import type { ActionResultKind, ActionResultRef, DurableResultLink } from "../db/store.js";
 import type { CalendarContext } from "../clockify/ports/users.js";
-import { CLAIM_TTL_MS } from "../db/store.js";
 import type { AppDeps } from "./deps.js";
 import {
   sanitizeStoredReplyForModel,
   isTransientErrorMessage,
 } from "./history-sanitizer.js";
-import { chatBodySchema } from "./request-schemas.js";
 import { deterministicGuardReply } from "./chat-guards.js";
 import {
   settleAgentTurn,
@@ -88,24 +79,26 @@ import {
   type Claims,
   type TurnMachinery,
 } from "./chat-results.js";
-import { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
+import { HISTORY_WINDOW_MESSAGES} from "./chat-constants.js";
 import { bestEffort } from "./best-effort.js";
 import { authorizeIntentWriteArguments } from "../harness/intent-authority.js";
 import { boundedCompleteSanitizedJson } from "../harness/safe-json.js";
 import { ACTION_RESULT_SUMMARY_MAX_BYTES } from "../db/action-results.js";
 import {
-  createWorkspaceMutationCoordinator,
   WorkspaceMutationRevokedError,
   type WorkspaceMutationLease,
 } from "../clockify/workspace-mutation-coordinator.js";
 import { HostRequestCancelledError } from "../clockify/request-governor.js";
 import {
-  createRouteAuthority,
-  type VerifiedSessionClaims,
-  type WriteAuthorityOutcome,
-} from "./route-authority.js";
+  createControlPlane,
+  type ChatPipeline,
+  type ChatPreconditions,
+  type ChatTurnOutcome,
+  type CommitConfirmationOutcome,
+} from "./control-plane.js";
+export type { ChatPipeline, ChatTurnOutcome, ChatPreconditions, CommitConfirmationOutcome };
 
-export type { WriteAuthorityOutcome } from "./route-authority.js";
+
 
 /**
  * The user request that drove a suspended turn: the LAST user-role message in the
@@ -152,118 +145,21 @@ function combineSelectionContext(previous: string | undefined, message: string):
   return `${combined.slice(0, half)}\n\n${combined.slice(-half)}`;
 }
 
-/** The outcome of one chat turn, shared by the JSON route and the streaming route. */
-export type ChatTurnOutcome =
-  | {
-      ok: true;
-      replyKind: string;
-      replyText: string;
-      results: unknown[];
-      resultLinks: DurableResultLink[];
-      /** v2 only (closure-plan PR 3): the turn's hydrated run-event page —
-       * canonical cards and the freshly rotated pending-confirmation control —
-       * delivered on the ORIGINAL turn. v1 never sets it; the routes treat it
-       * as absent. */
-      runEvents?: import("../assistant-v2/events.js").RunEventPage;
-    }
-  | { ok: false; code: string; message: string };
-
-/** What `chatPreconditions` returns when a request is cleared to run a turn. */
-export type ChatPreconditions = {
-  claims: { sessionId: string; workspaceId: string; adminUserId: string };
-  installation: Installation;
-  message: string;
-  requestId: string;
-  replay?: { status: number; body: unknown };
-  /** v2-only (T14-E). v1 ignores this field — its `executeChatTurn` never reads it. */
-  continuationRunId?: string;
-};
-
-/** A validated-and-committed confirmation, or the structured rejection to surface. */
-export type CommitConfirmationOutcome =
-  | { ok: false; status: number; body: { ok: false; code: string; message: string } }
-  | {
-      ok: true;
-      receipt: SuccessReceipt | ErrorReceipt;
-      partialResult?: Extract<ActionResult, { kind: "partial" }>;
-      undoId: string | undefined;
-      agentState: AgentState | undefined;
-      installation: Installation | undefined;
-      persistenceDegraded?: true;
-    };
-
-export interface ChatPipeline {
-  loadPolicy: (workspaceId: string, adminUserId: string) => AdminPolicy;
-  requireSession: (req: Request, res: Response) => Promise<VerifiedSessionClaims | undefined>;
-  verifyWriteAuthority: (
-    claims: Claims,
-    installation?: Installation,
-    signal?: AbortSignal,
-  ) => Promise<WriteAuthorityOutcome>;
-  /** Per-admin budget for creating fresh sessions (POST /chat/new) — bounds resetting
-   *  the per-session paid-loop limit by minting sessions. Keyed by workspace+admin. */
-  newChatAllowed: (workspaceId: string, adminUserId: string) => RateLimitDecision;
-  actionContext: (
-    workspaceId: string,
-    adminUserId: string,
-    installation: Installation,
-    sessionId?: string,
-    signal?: AbortSignal,
-  ) => ActionContext;
-  runResume: (
-    claims: Claims,
-    installation: Installation | undefined,
-    agentState: AgentState | undefined,
-    receipt: SuccessReceipt | ErrorReceipt,
-    onResult?: (result: unknown) => void,
-    onStatus?: (status: { action: string; label: string }) => void,
-    signal?: AbortSignal,
-  ) => Promise<{ replyKind: string; replyText: string; results: unknown[] } | undefined>;
-  commitConfirmation: (
-    claims: Claims,
-    record: NonNullable<ReturnType<AppDeps["store"]["getPendingConfirmation"]>>,
-    nonce: string,
-    signal?: AbortSignal,
-  ) => Promise<CommitConfirmationOutcome>;
-  executeChatTurn: (
-    claims: { sessionId: string; workspaceId: string; adminUserId: string },
-    installation: Installation,
-    message: string,
-    onResult?: (result: unknown) => void,
-    onStatus?: (status: { action: string; label: string }) => void,
-    signal?: AbortSignal,
-    requestId?: string,
-    continuationRunId?: string,
-  ) => Promise<ChatTurnOutcome>;
-  chatPreconditions: (req: Request, res: Response) => Promise<ChatPreconditions | undefined>;
-}
 
 export function createChatPipeline(deps: AppDeps): ChatPipeline {
-  const now = deps.now ?? (() => new Date());
-  const mutationCoordinator = deps.mutationCoordinator ?? createWorkspaceMutationCoordinator();
-  const intentCapabilitiesEnforced = deps.config.nodeEnv !== "test" ||
-    deps.enforceIntentCapabilitiesInTests === true;
-  // Per-SESSION chat rate limit — each turn drives a paid model loop, and
-  // nothing else bounds it (confirm/cancel/undo are button-driven + one-use).
-  const chatLimiter = createSlidingWindowLimiter(
-    deps.config.chatRateLimitMax ?? DEFAULT_CHAT_RATE_LIMIT_MAX,
-    deps.config.chatRateLimitWindowMs ?? DEFAULT_CHAT_RATE_LIMIT_WINDOW_MS,
-  );
-  // Per-ADMIN session-creation limiter (POST /chat/new): the chat limiter above is
-  // keyed by sessionId, so minting fresh sessions resets its budget — this bounds that.
-  const newChatLimiter = createSlidingWindowLimiter(
-    deps.config.newChatRateLimitMax ?? DEFAULT_NEW_CHAT_RATE_LIMIT_MAX,
-    deps.config.newChatRateLimitWindowMs ?? DEFAULT_NEW_CHAT_RATE_LIMIT_WINDOW_MS,
-  );
-  const newChatAllowed = (workspaceId: string, adminUserId: string): RateLimitDecision =>
-    newChatLimiter.check(`${workspaceId}:${adminUserId}`, now().getTime());
-
+  // C10: the engine-neutral members come from the shared control plane. The
+  // raw handles are destructured (not reconstructed) so v1 keeps ONE
+  // chatLimiter across `chatPreconditions` and `runResume`, and ONE
+  // createRouteAuthority — see control-plane.ts invariants (A) and (B).
+  const controlPlane = createControlPlane(deps);
   const {
-    loadPolicy,
-    requireSession,
-    verifyWriteAuthority,
-    actionContext,
-  } = createRouteAuthority(deps, now);
+    now,
+    chatLimiter,
+    mutationCoordinator,
+    intentCapabilitiesEnforced,
+    recordUndoIfReversible,
+  } = controlPlane;
+  const { loadPolicy, actionContext } = controlPlane.members;
 
   /** Synchronous final gate for persistence that is not protected by a mutation
    * settlement lease. No await may appear between this check and the write. */
@@ -281,29 +177,6 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       currentSession.adminUserId === claims.adminUserId;
   };
 
-  /** Record a one-use undo for a successful reversible creation; return its id. */
-  function recordUndoIfReversible(
-    claims: { sessionId: string; workspaceId: string; adminUserId: string },
-    installationGeneration: number,
-    receipt: SuccessReceipt | ErrorReceipt,
-  ): string | undefined {
-    if (!receipt.ok) return undefined;
-    // An idempotent replay returns the ORIGINAL commit's receipt (with a replay
-    // warning) — its changed.created survives, but that first commit ALREADY minted
-    // an undo record. Minting a second here would give one entity two live undo
-    // handles. Suppress on replay (markReplayed tags the warning).
-    if (receipt.warnings?.some((w) => w.code === "idempotent_replay")) return undefined;
-    const reversal = reversibleCreations(receipt);
-    if (reversal.length === 0) return undefined;
-    return deps.store.recordUndoable({
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      actionName: receipt.action,
-      installationGeneration,
-      reversal,
-    });
-  }
 
   function createTurnMachinery(
     claims: Claims,
@@ -1058,308 +931,6 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return { replyKind, replyText, results: m.results };
   }
 
-  /**
-   * Validate + commit a confirmed risky write through the single choke point.
-   * Returns the structured error (with its HTTP status) when validation/policy/
-   * the one-use claim rejects — BEFORE any commit, so a denied confirm never
-   * burns the nonce — or the committed receipt + undo + (valid) agent state for
-   * the resume. Mirrors the exact ordering the safety review verified.
-   */
-  async function commitConfirmation(
-    claims: Claims,
-    record: NonNullable<ReturnType<typeof deps.store.getPendingConfirmation>>,
-    nonce: string,
-    signal?: AbortSignal,
-  ): Promise<CommitConfirmationOutcome> {
-    const validation = confirmPending({
-      record,
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      nonce,
-      sessionSecret: deps.config.sessionSecret,
-      now: now(),
-      expectedActionFingerprint: actionFingerprint((record.operation as ConfirmableOperation).actionName),
-      expectedCatalogHash: catalogHash(),
-    });
-    if (!validation.ok) {
-      if (validation.code === "expired") deps.store.expireConfirmation(record.id);
-      return { ok: false, status: 400, body: { ok: false, code: validation.code, message: validation.message } };
-    }
-
-    const operation = record.operation as ConfirmableOperation;
-    const installation = deps.store.getInstallation(claims.workspaceId);
-    if (!installation || installation.status !== "active") {
-      return {
-        ok: false,
-        status: 503,
-        body: {
-          ok: false,
-          code: "role_verification_unavailable",
-          message: "The add-on is not active for this workspace. No change was made.",
-        },
-      };
-    }
-    if (!Number.isSafeInteger(record.installationGeneration) ||
-        record.installationGeneration !== installation.generation ||
-        operation.installationGeneration !== record.installationGeneration) {
-      return {
-        ok: false,
-        status: 409,
-        body: {
-          ok: false,
-          code: "installation_changed",
-          message: "The Clockify installation changed after this preview was created. Create a fresh preview.",
-        },
-      };
-    }
-    let capabilityScope: Parameters<typeof deps.store.consumeIntentCapabilityForOperation>[0] | undefined;
-    if (intentCapabilitiesEnforced) {
-      if (!record.capabilityId || !record.capabilityHash) {
-        return {
-          ok: false,
-          status: 400,
-          body: {
-            ok: false,
-            code: "incompatible_confirmation",
-            message: "This preview predates the current intent-safety contract. Create a fresh preview.",
-          },
-        };
-      }
-      capabilityScope = {
-        operationId: record.operationId,
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        sessionId: claims.sessionId,
-        capabilityId: record.capabilityId,
-        capabilityHash: record.capabilityHash,
-        expectedCatalogHash: catalogHash(),
-        expectedActionName: operation.actionName,
-      };
-      try {
-        deps.store.getIntentCapabilityForOperation(capabilityScope);
-      } catch {
-        return {
-          ok: false,
-          status: 400,
-          body: {
-            ok: false,
-            code: "incompatible_confirmation",
-            message: "This preview's intent authority is no longer compatible. Create a fresh preview.",
-          },
-        };
-      }
-    }
-
-    // Re-check current policy BEFORE consuming the one-use preview, so a policy
-    // that was lowered after the preview denies cleanly without burning it
-    // (commitConfirmedOperation re-checks again as defense in depth).
-    if (!operation.risks.includes("permission_change")) {
-      const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
-      if (!canWrite(policy, operation.featureGroup)) {
-        return {
-          ok: false,
-          status: 400,
-          body: {
-            ok: false,
-            code: "policy_denied",
-            message: accessDeniedMessage(operation.featureGroup, "write"),
-          },
-        };
-      }
-    }
-
-    const authority = await verifyWriteAuthority(claims, installation, signal);
-    if (!authority.ok) {
-      return {
-        ok: false,
-        status: authority.status,
-        body: { ok: false, code: authority.code, message: authority.message },
-      };
-    }
-
-    let mutationLease: WorkspaceMutationLease;
-    try {
-      mutationLease = mutationCoordinator.acquire(
-        claims.workspaceId,
-        installation.generation,
-        signal,
-      );
-    } catch (error) {
-      if (!(error instanceof WorkspaceMutationRevokedError)) throw error;
-      return {
-        ok: false,
-        status: 409,
-        body: { ok: false, code: "installation_changed", message: error.message },
-      };
-    }
-    if (mutationLease.signal.aborted) {
-      mutationLease.release();
-      return {
-        ok: false,
-        status: 409,
-        body: {
-          ok: false,
-          code: "request_cancelled",
-          message: "The confirmation was cancelled before dispatch. No change was made.",
-        },
-      };
-    }
-
-    // Atomic one-use claim: only the caller that transitions pending → executing wins.
-    if (!deps.store.markConfirmationExecuting(record.id)) {
-      mutationLease.release();
-      return { ok: false, status: 409, body: { ok: false, code: "already_used", message: "This preview was already used." } };
-    }
-
-    try {
-    // ALL confirmed operations go through the SAME commit path. The action's own
-    // `commit` does the work; for a permission change that commit persists the new
-    // policy itself via the `savePolicy` capability the context carries.
-    let commitResult: CommitResult;
-    const consumed = capabilityScope
-      ? deps.store.consumeIntentCapabilityForOperation(capabilityScope)
-      : undefined;
-    if (consumed?.state === "denied") {
-      commitResult = errorReceipt({
-        action: operation.actionName,
-        code: "intent_capability_denied",
-        message: "This write exceeds the exact admin-authored intent capability.",
-        recovery: { hint: "Create a fresh request and preview.", retryable: false },
-      });
-    } else {
-      // A store-backed ATOMIC idempotency ledger (10-min window) so re-confirming
-      // the same intent (e.g. the same invoice) can't create a duplicate — even
-      // under CONCURRENT confirms: claim is taken before the commit await, so two
-      // simultaneous confirms reach the host at most once (r1-concurrency-races-01).
-      const idempotency: AtomicIdempotencyLedger = {
-        lookup: (key) => deps.store.lookupIdempotency(
-          key,
-          claims.workspaceId,
-          claims.adminUserId,
-          now().getTime() - IDEMPOTENCY_WINDOW_MS,
-        ),
-        // The atomic path never calls legacy record; canonical persistence owns fill.
-        record: () => undefined,
-        claim: (key) => {
-          const state = deps.store.claimIdempotency(
-            key,
-            claims.workspaceId,
-            claims.adminUserId,
-            now().getTime(),
-            now().getTime() - IDEMPOTENCY_WINDOW_MS,
-            now().getTime() - CLAIM_TTL_MS,
-          );
-          if (state === "won") {
-            try {
-              deps.store.bindConfirmationIdempotencyKey(record.id, key);
-            } catch (error) {
-              deps.store.releaseIdempotency(key, claims.workspaceId, claims.adminUserId);
-              throw error;
-            }
-          }
-          return state;
-        },
-        lookupCompleted: (key) => deps.store.claimIdempotencyReceipt(key, claims.workspaceId, claims.adminUserId),
-        // The claim was bound before dispatch; settleConfirmation fills it in
-        // the same transaction as the canonical result + confirmation scrub.
-        fill: () => undefined,
-        release: (key) => deps.store.releaseConfirmationIdempotencyKey(record.id, key),
-        // Heartbeat a long multi-call commit's live claim so it is never swept
-        // mid-flight and double-committed (r1-concurrency-races-01 follow-up).
-        touch: (key) => deps.store.touchIdempotencyClaim(key, claims.workspaceId, claims.adminUserId, now().getTime()),
-      };
-      const authorizedContext = {
-        ...actionContext(
-          claims.workspaceId,
-          claims.adminUserId,
-          installation,
-          undefined,
-          mutationLease.signal,
-        ),
-        mutationJournal: deps.store.mutationStepJournal(record.operationId),
-      };
-      // Keep authorizeWrite on the context: the exact mutation scope invokes it
-      // again immediately before every primary/compensation network dispatch.
-      commitResult = operation.mutationPlan
-        ? await commitConfirmedOperation(
-            { ...authorizedContext, idempotency },
-            { ...operation, mutationPlan: operation.mutationPlan },
-          )
-        : await commitConfirmedOperation({ ...authorizedContext, idempotency }, operation);
-    }
-
-    let partialResult: Extract<ActionResult, { kind: "partial" }> | undefined;
-    let receipt: SuccessReceipt | ErrorReceipt;
-    if (isPartialCommitResult(commitResult)) {
-      partialResult = commitResult;
-      receipt = commitResult.receipt;
-    } else {
-      receipt = commitResult;
-    }
-
-    // The host dispatch already happened. Retry only the synchronous SQLite
-    // settlement (never the Clockify mutation), then return the truthful host
-    // receipt even if persistence remains degraded. Claim-time persistence has
-    // already scrubbed dispatch material and bound the one unknown result that
-    // startup recovery will reuse if final settlement never persists.
-    const terminalStatus = partialResult
-      ? "partial"
-      : receipt.ok
-        ? "succeeded"
-      : receipt.code === "commit_outcome_unknown"
-        ? "outcome_unknown"
-        : "definitive_failed";
-    let resultRef: ActionResultRef | undefined;
-    let settlementError: unknown;
-    for (let attempt = 0; attempt < 2 && !resultRef; attempt += 1) {
-      try {
-        resultRef = deps.store.settleConfirmedOperation(
-          record.id,
-          terminalStatus,
-          operation.actionName,
-          partialResult ?? receipt,
-        );
-      } catch (error) {
-        settlementError = error;
-      }
-    }
-    if (!resultRef) {
-      console.error(
-        "canonical action-result persistence degraded (change already applied; receipt preserved):",
-        settlementError instanceof Error ? settlementError.message : String(settlementError),
-      );
-    }
-    if (resultRef) {
-      bestEffort("post-commit audit failed", () => {
-        deps.store.addAuditEvent({
-          workspaceId: claims.workspaceId,
-          adminUserId: claims.adminUserId,
-          sessionId: claims.sessionId,
-          actionName: operation.actionName,
-          risk: operation.risks,
-          resultRef: resultRef!,
-        });
-      });
-    }
-    let undoId: string | undefined;
-    bestEffort("post-commit undo bookkeeping failed", () => {
-      undoId = recordUndoIfReversible(claims, installation.generation, receipt);
-    });
-    const agentState = receipt.ok && !partialResult ? parseAgentState(record.agentState) : undefined;
-    return {
-      ok: true,
-      receipt,
-      ...(partialResult ? { partialResult } : {}),
-      undoId,
-      agentState,
-      installation,
-      ...(!resultRef ? { persistenceDegraded: true as const } : {}),
-    };
-    } finally {
-      mutationLease.release();
-    }
-  }
 
   /**
    * A deterministic, model-free answer turn (the three short-circuit guards below
@@ -2041,137 +1612,6 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return { ok: true, replyKind, replyText, results: m.results, resultLinks: m.resultLinks };
   }
 
-  async function chatPreconditions(req: Request, res: Response): Promise<ChatPreconditions | undefined> {
-    const claims = await requireSession(req, res);
-    if (!claims) return undefined;
-    // Rate-limit BEFORE parsing/persisting anything — a limited turn never
-    // stores the user message nor opens the NDJSON stream.
-    const limited = chatLimiter.check(claims.sessionId, now().getTime());
-    if (!limited.allowed) {
-      res.setHeader("Retry-After", String(Math.ceil(limited.retryAfterMs / 1000)));
-      res.status(429).json({
-        ok: false,
-        code: "rate_limited",
-        message: "You're sending messages too quickly — please wait a moment and try again.",
-      });
-      return undefined;
-    }
-    const parsed = chatBodySchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ ok: false, code: "invalid_args", message: "A message is required." });
-      return undefined;
-    }
-    if (!parsed.data.requestId && deps.config.nodeEnv !== "test") {
-      res.status(400).json({ ok: false, code: "invalid_args", message: "A client-generated requestId UUID is required." });
-      return undefined;
-    }
-    const installation = deps.store.getInstallation(claims.workspaceId);
-    if (!installation || installation.status !== "active") {
-      res.status(409).json({ ok: false, code: "not_installed", message: "The add-on is not active for this workspace." });
-      return undefined;
-    }
-    const requestId = parsed.data.requestId ?? randomUUID();
-    const intentHash = createHash("sha256").update(parsed.data.message).digest("hex");
-    const claim = deps.store.claimTurnRun({
-      requestId,
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      intentHash,
-    });
-    if (claim.state === "conflict") {
-      res.status(409).json({
-        ok: false,
-        code: "operation_id_conflict",
-        message: "This requestId was already used for a different chat intent.",
-      });
-      return undefined;
-    }
-    if (claim.state === "in_flight") {
-      res.status(409).json({
-        ok: false,
-        code: "operation_in_progress",
-        message: "This request is already in progress.",
-      });
-      return undefined;
-    }
-    if (claim.state === "outcome_unknown") {
-      res.status(409).json({
-        ok: false,
-        code: "operation_outcome_unknown",
-        message: "The prior request was interrupted and its outcome is unknown.",
-      });
-      return undefined;
-    }
-    if (claim.state === "replay") {
-      const storedResponse = claim.response as { status: number; body: unknown };
-      const storedBody = storedResponse.body && typeof storedResponse.body === "object"
-        ? storedResponse.body as Record<string, unknown>
-        : undefined;
-      const storedResults = Array.isArray(storedBody?.results) ? storedBody.results : [];
-      const replayResults: unknown[] = [];
-      for (const result of storedResults) {
-        const previewId = result && typeof result === "object" && (result as { kind?: unknown }).kind === "preview"
-          ? (result as { previewId?: unknown }).previewId
-          : undefined;
-        if (typeof previewId !== "string") {
-          replayResults.push(result);
-          continue;
-        }
-        const record = deps.store.getPendingConfirmation(previewId);
-        if (
-          !record ||
-          record.status !== "pending" ||
-          record.sessionId !== claims.sessionId ||
-          record.workspaceId !== claims.workspaceId ||
-          record.adminUserId !== claims.adminUserId
-        ) {
-          continue;
-        }
-        const rotated = rotatePendingNonce({
-          record,
-          sessionId: claims.sessionId,
-          workspaceId: claims.workspaceId,
-          adminUserId: claims.adminUserId,
-          sessionSecret: deps.config.sessionSecret,
-          now: now(),
-        });
-        if (!rotated.ok) {
-          if (rotated.code === "expired") deps.store.expireConfirmation(record.id);
-          continue;
-        }
-        if (!deps.store.updateConfirmationNonceHash(record.id, rotated.record.nonceHash)) continue;
-        replayResults.push({ ...result as object, nonce: rotated.nonce });
-      }
-      return {
-        claims,
-        installation,
-        message: parsed.data.message,
-        requestId,
-        replay: storedBody
-          ? { ...storedResponse, body: { ...storedBody, results: replayResults } }
-          : storedResponse,
-      };
-    }
-    deps.store.markTurnRunExecuting(claims.sessionId, requestId);
-    return {
-      claims,
-      installation,
-      message: parsed.data.message,
-      requestId,
-      ...(parsed.data.continuationRunId ? { continuationRunId: parsed.data.continuationRunId } : {}),
-    };
-  }
 
-  return {
-    loadPolicy,
-    requireSession,
-    verifyWriteAuthority,
-    newChatAllowed,
-    actionContext,
-    runResume,
-    commitConfirmation,
-    executeChatTurn,
-    chatPreconditions,
-  };
+  return { ...controlPlane.members, runResume, executeChatTurn };
 }

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AppDeps } from "./deps.js";
-import type { ChatPipeline, ChatTurnOutcome } from "./chat-pipeline.js";
-import { createChatPipeline } from "./chat-pipeline.js";
+import { createControlPlane, type ChatPipeline, type ChatTurnOutcome } from "./control-plane.js";
 import { runAssistantV2 } from "../assistant-v2/runner.js";
 import { createReadExecutionPort } from "../assistant-v2/read-execution.js";
 import { MODEL_API_ACTION_CATALOG } from "../harness/api-catalog.js";
@@ -242,7 +241,12 @@ export type ClarificationResolutionPort = ReturnType<typeof createClarificationR
 
 /** V2 chat pipeline: native-tool runner only — never falls through to v1 planner. */
 export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
-  const controlPlane = createChatPipeline(deps);
+  // C10: v2 no longer instantiates v1's pipeline to borrow its control plane.
+  // `createControlPlane` supplies the seven engine-neutral members —
+  // including `commitConfirmation`, which a v2 BATCH preview row still
+  // reaches via routes/confirmations.ts:58 (isV2AssistantPreviewConfirmation
+  // excludes batched rows).
+  const controlPlane = createControlPlane(deps).members;
   return {
     ...controlPlane,
     runResume: async () => undefined,
