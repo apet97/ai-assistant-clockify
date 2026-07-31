@@ -827,6 +827,37 @@ export function validateCatalogPresentationRegistries(
   }
 }
 
+/**
+ * Boot-time completeness gate for the model-facing surface.
+ *
+ * `validateCatalogPresentationRegistries` deliberately `continue`s past an
+ * action with NO `presentation` at all (:809) — correct for the full internal
+ * catalog, where composite/generic/local actions legitimately have none, but
+ * wrong for the `api`-exposed surface, where every action must carry exactly
+ * one `presentation` whose `presenterId` is unique. Until now that assertion
+ * ran only inside a unit test (`requireCompletePresenterCoverage`); a catalog
+ * edit that dropped a `presentation` would ship and fail at preview time.
+ *
+ * Filtered to `apiExposure === "api"`, so passing the full internal catalog is
+ * still valid. Both conditions are currently unreachable for a definition that
+ * survives `normalizeRegistryAction` — this is defence in depth against a
+ * future change to that boundary, not a live hole being closed.
+ */
+function assertApiExposedPresentationCoverage(actions: readonly ActionDefinition[]): void {
+  const seenPresenterIds = new Map<string, string>();
+  for (const action of actions) {
+    if (action.apiExposure !== "api") continue;
+    if (!action.presentation) {
+      throw new Error(`missing_presenter:${action.name}`);
+    }
+    const owner = seenPresenterIds.get(action.presentation.presenterId);
+    if (owner !== undefined) {
+      throw new Error(`duplicate_presenter:${action.name}:${action.presentation.presenterId}`);
+    }
+    seenPresenterIds.set(action.presentation.presenterId, action.name);
+  }
+}
+
 export function initializePreparedWritePresentationRegistries(
   actions: readonly ActionDefinition[],
 ): void {
@@ -842,6 +873,7 @@ export function initializePreparedWritePresentationRegistries(
       presentPreparedWrite: metadataDrivenPresentPreparedWrite,
     });
   }
+  assertApiExposedPresentationCoverage(actions);
   validateCatalogPresentationRegistries(actions);
 }
 

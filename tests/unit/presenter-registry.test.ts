@@ -11,7 +11,10 @@ import {
   presentPendingWriteConfirmation,
 } from "../../src/services/result-presentation-service.js";
 import { presentedResultSchema } from "../../src/assistant-v2/presentation/presented-result.js";
-import type { JsonValue } from "../../src/harness/prepared-write-presentation.js";
+import {
+  initializePreparedWritePresentationRegistries,
+  type JsonValue,
+} from "../../src/harness/prepared-write-presentation.js";
 
 /**
  * T15-B: the presenter registry. `tests/unit/v2-prepared-write.test.ts`
@@ -45,6 +48,34 @@ describe("T15-B: exactly one presenter for every model-API action", () => {
     const errors = findPresenterCoverageErrors(actions);
     expect(errors).toEqual([{ code: "missing_presenter", actionName: "clockify_missing" }]);
     expect(() => requireCompletePresenterCoverage(actions)).toThrow("missing_presenter:clockify_missing");
+  });
+
+  /**
+   * C1: the same completeness assertion now runs at BOOT, not only here.
+   * `initializePreparedWritePresentationRegistries` is what
+   * `src/harness/api-catalog.ts:83` calls at module load, so a catalog edit
+   * that dropped a `presentation` can no longer reach preview time. The fake
+   * here reproduces exactly one real behaviour: an `apiExposure: "api"`
+   * definition that carries no `presentation` — the state
+   * `validateCatalogPresentationRegistries` deliberately skips (:809).
+   */
+  it("the BOOT initializer rejects an api-exposed action with no presentation", () => {
+    expect(() => initializePreparedWritePresentationRegistries([
+      fixtureAction({ name: "clockify_boot_missing", presentation: undefined }),
+    ])).toThrow("missing_presenter:clockify_boot_missing");
+  });
+
+  it("the BOOT initializer rejects two api-exposed actions sharing a presenterId", () => {
+    expect(() => initializePreparedWritePresentationRegistries([
+      fixtureAction({ name: "clockify_boot_a", presentation: { presenterId: "shared_id", version: 1 } }),
+      fixtureAction({ name: "clockify_boot_b", presentation: { presenterId: "shared_id", version: 1 } }),
+    ])).toThrow("duplicate_presenter:clockify_boot_b:shared_id");
+  });
+
+  it("the BOOT initializer still accepts a non-api action with no presentation", () => {
+    expect(() => initializePreparedWritePresentationRegistries([
+      fixtureAction({ name: "clockify_composite", apiExposure: "composite", presentation: undefined }),
+    ])).not.toThrow();
   });
 
   it("fails on a duplicate presenterId across two actions", () => {

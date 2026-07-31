@@ -14,14 +14,23 @@ import { PRESENTED_RESULT_MAX_FACTS, type PresentedResult } from "./presented-re
  * `action.name`, unique by the registry's own duplicate-name check) — see
  * `src/harness/api-catalog.ts`'s module-level
  * `initializePreparedWritePresentationRegistries` call. This module does NOT
- * reimplement that: it adds the one assertion Task 11's own validator does
- * not make (`validateCatalogPresentationRegistries` silently `continue`s past
- * an action with no `presentation` at all — appropriate for the full
- * `INTERNAL_ACTION_CATALOG`, where composite/generic actions legitimately
- * have none, but wrong for the model-facing surface, where every `api`-
- * exposed action must have exactly one) — and the mechanical
+ * reimplement that.
+ *
+ * Phase C (C1): the api-exposed completeness assertion that used to live ONLY
+ * here — `validateCatalogPresentationRegistries` silently `continue`s past an
+ * action with no `presentation` at all (appropriate for the full
+ * `INTERNAL_ACTION_CATALOG`, where composite/generic actions legitimately have
+ * none, but wrong for the model-facing surface) — now also runs at boot inside
+ * `initializePreparedWritePresentationRegistries`. What remains here is the
+ * error-collecting variant tests assert on, and the mechanical
  * `PreparedWriteFact[] -> PresentedResult["facts"]` adapter every v2 result
  * presenter (T15-C read presenters, T15-D write terminal presenters) shares.
+ *
+ * NOTE on the name "registry": all 127 `presentation` records register the
+ * SAME function (`metadataDrivenPresentPreparedWrite`). Nothing is dispatched
+ * through the registry — `operation-preparation-service.ts:301` calls that one
+ * presenter directly, and the map exists to pin each action's presenter
+ * VERSION and prove coverage. Per-action presenters are not planned.
  *
  * Reuses Task 11's formatters and `toPublicPresentationFacts` verbatim — this
  * file defines no formatting policy of its own.

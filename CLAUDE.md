@@ -276,6 +276,18 @@ bug was found against the REAL API, not by reading the code.
 - `src/assistant-v2/` — the current agent runtime: protocol/state, bounded runner,
   durable events/observations, catalog discovery and loading, read execution,
   grounded references, prompt, and the presented-result/presenter registry.
+  The "presenter registry" is a **version-pinning and coverage table, not a
+  dispatch table**: all 127 `presentation` records register the SAME function,
+  `metadataDrivenPresentPreparedWrite`
+  (`src/harness/prepared-write-presentation.ts:547`), and previews call that one
+  presenter directly (`operation-preparation-service.ts:301`) rather than
+  looking one up. The v2 terminal card renders from the shared read-fact
+  extractor `factsFromReceipt` (`result-view-service.ts:52`) plus
+  `defaultTitle` — one generic extractor in place of per-action ones.
+  Per-action presenters are not planned. Coverage is enforced at BOOT:
+  `api-catalog.ts:83` runs `initializePreparedWritePresentationRegistries`,
+  which asserts every `api`-exposed action carries exactly one uniquely-keyed
+  `presentation` and then version-checks each registration.
 - `src/services/` — the production orchestration seam used by routes and v2:
   run/session context, API discovery, preparation/execution, confirmation,
   clarification, result/history/artifact views, events/hydration, permissions,
