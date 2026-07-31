@@ -154,9 +154,9 @@ function failedUndoReceipt(refs: EntityRef[], detail: string): ErrorReceipt {
 }
 
 /**
- * Production undo path: every host effect is one exact durable primary step.
- * The legacy reverseCreation function below remains only for isolated fake/unit
- * callers that do not own an operation journal.
+ * The ONE undo path: every host effect is one exact durable primary step.
+ * (C4 deleted the non-durable `reverseCreation` twin; nothing bypasses the
+ * operation journal any more.)
  */
 export async function reverseCreationDurably(
   ctx: ActionContext,
@@ -328,79 +328,6 @@ export async function reverseCreationDurably(
     status: "undone",
     remaining: [],
   };
-}
-
-/** Reverse a creation by deleting its entities (reverse order). Policy-gated; one call. */
-export async function reverseCreation(
-  ctx: ActionContext,
-  refs: EntityRef[],
-): Promise<SuccessReceipt | ErrorReceipt> {
-  if (refs.length === 0) {
-    return errorReceipt({ action: "undo", code: "not_undoable", message: "There is nothing to undo." });
-  }
-
-  const denied = firstDeniedGroup(ctx.policy, refs);
-  if (denied) {
-    return errorReceipt({
-      action: "undo",
-      code: "policy_denied",
-      message: `Undo needs write access to ${denied}, which is disabled in your assistant permissions.`,
-      recovery: { hint: `Enable write access for ${denied} and try again.`, retryable: true },
-    });
-  }
-
-  if (!ctx.clockify.deleteEntity) {
-    return errorReceipt({
-      action: "undo",
-      code: "unsupported",
-      message: "Undo is not supported by the configured Clockify client.",
-    });
-  }
-
-  const undone: EntityRef[] = [];
-  const warnings: Warning[] = [];
-  for (const ref of [...refs].reverse()) {
-    try {
-      await ctx.clockify.deleteEntity({
-        entityType: ref.type,
-        id: ref.id,
-        ...(ref.projectId ? { projectId: ref.projectId } : {}),
-      });
-      undone.push(ref);
-    } catch (err) {
-      warnings.push({
-        code: "undo_failed",
-        message: `Couldn't remove ${ref.type} ${ref.name ?? ref.id}: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-  }
-
-  if (undone.length === 0) {
-    // Every delete failed (the host rejected them — the addon policy was already
-    // re-checked above). The entities persist, so this is a FAILURE, not a silent
-    // success: return an error receipt so the route responds 400 and the UI
-    // re-enables the button with the real reason, instead of showing "Undone"
-    // over changes that are still live. (A PARTIAL failure stays a success-with-
-    // warnings below — some entities really were removed.)
-    const detail = warnings.map((w) => w.message).join("; ");
-    return errorReceipt({
-      action: "undo",
-      code: "undo_failed",
-      message:
-        refs.length === 1
-          ? `Couldn't undo — the change could not be reversed. ${detail}`.trim()
-          : `Couldn't undo — none of the ${refs.length} created items could be removed. ${detail}`.trim(),
-      recovery: { hint: "Nothing was removed; remove them manually if needed.", retryable: false },
-    });
-  }
-
-  return successReceipt({
-    action: "undo",
-    entity: "undo",
-    ids: { workspaceId: ctx.workspaceId },
-    changed: { deleted: undone },
-    warnings: warnings.length ? warnings : undefined,
-  });
 }
 
 function markUndoStepDispatched(

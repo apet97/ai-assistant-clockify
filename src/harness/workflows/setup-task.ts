@@ -31,7 +31,7 @@ import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
  * there are at most two steps and only `invoices` (the rate) needs a sub-group
  * pre-check beyond the outer `work_structure` gate. The created task is reported
  * in `changed.created` WITH its projectId, so the standard one-click undo
- * (reverseCreation → project-scoped deleteTask) removes it (and its rate). The
+ * (reverseCreationDurably → project-scoped deleteTask) removes it (and its rate). The
  * mid-commit rollback uses the same typed deleteTask compensator.
  */
 

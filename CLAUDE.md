@@ -664,7 +664,7 @@ bug was found against the REAL API, not by reading the code.
   operation, even if its payload is equal. **Undo** for creations runs in reverse
   order, is one-use, and re-checks policy. A created TASK ref carries its
   `projectId` on the `EntityRef`
-  (a task delete is project-scoped), so `reverseCreation` can delete it; a task
+  (a task delete is project-scoped), so `reverseCreationDurably` can delete it; a task
   ref missing its `projectId` can't be reversed and returns an honest
   `undo_failed`, never a silent success (the fake mirrors this — it no longer
   "deletes" a task without a projectId). `compose.ts` rolls back required-step

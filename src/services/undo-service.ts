@@ -72,7 +72,7 @@ export function createUndoService(deps: UndoServiceDeps) {
     }
 
     // Re-check write policy BEFORE consuming the one-use record, so a lowered policy
-    // denies cleanly without burning it (reverseCreation re-checks as defense in depth).
+    // denies cleanly without burning it (reverseCreationDurably re-checks as defense in depth).
     const denied = firstDeniedGroup(deps.loadPolicy(claims.workspaceId, claims.adminUserId), record.reversal);
     if (denied) {
       return {

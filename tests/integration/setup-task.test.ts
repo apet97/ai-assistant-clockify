@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { executeAction, commitConfirmedOperation } from "../../src/harness/actions.js";
-import { reverseCreation, reversibleCreations } from "../../src/harness/undo.js";
+import { reverseCreationDurably, reversibleCreations } from "../../src/harness/undo.js";
+import { durableUndoHarness } from "../helpers/durable-undo.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { ActionContext, ConfirmableOperation, IdempotencyLedger } from "../../src/harness/catalog.js";
@@ -120,10 +121,18 @@ describe("clockify_setup_task — single-approval task composite", () => {
       expect.objectContaining({ type: "task", projectId: "p1" }),
     ]);
 
-    // The created task is genuinely reversible — reverseCreation deletes it
-    // (project-scoped deleteTask), removing the task and its rate.
-    const undo = await reverseCreation(ctx, reversibleCreations(receipt));
-    expect(undo.ok).toBe(true);
+    // The created task is genuinely reversible — the DURABLE undo (the only
+    // undo production has, confirmation-service.ts:412) marks it DONE then
+    // deletes it project-scoped, removing the task and its rate.
+    const refs = reversibleCreations(receipt);
+    const harness = durableUndoHarness(ctx, refs);
+    try {
+      const undo = await reverseCreationDurably(harness.context, refs, harness.operationId, harness.plan);
+      expect(undo.receipt.ok).toBe(true);
+      expect(undo.status).toBe("undone");
+    } finally {
+      harness.close();
+    }
     expect(fake.state.tasks.some((t) => t.name === "Login")).toBe(false);
   });
 
