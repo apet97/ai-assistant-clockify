@@ -51,6 +51,49 @@ describe("terminal reason copy", () => {
   });
 });
 
+/**
+ * The drift guard.
+ *
+ * `receipt.code` is `string` and the denial producers are not closed by types, so
+ * "the union is complete" cannot be a compile-time fact. This pins the codes those
+ * producers can actually REACH `outcome.code` with, each read from its source. A new
+ * one added upstream fails HERE — loudly — rather than silently degrading to
+ * `internal_error` on an admin's screen, which is the failure mode that would
+ * otherwise be invisible.
+ */
+describe("every reachable denial code is a member", () => {
+  it.each([
+    // services/api-discovery-service.ts:86,112
+    ["too_many_refinements", "api-discovery-service"],
+    ["invalid_args", "api-discovery-service"],
+    // assistant-v2/read-execution.ts:168,233-238
+    ["unavailable_for_auth_class", "read-execution"],
+    ["policy_denied", "read-execution"],
+    ["unknown_action", "read-execution"],
+    // services/operation-preparation-service.ts:470-478
+    ["host_call_budget_exceeded", "operation-preparation"],
+    ["clarification_required", "operation-preparation"],
+    ["presentation_limit_exceeded", "operation-preparation"],
+    ["write_port_not_ready", "operation-preparation"],
+    // services/action-execution-service.ts:38 (denyCode) + 176 (not-admitted tail)
+    ["duplicate_tool_call_id", "action-execution"],
+    ["mixed_discovery_batch", "action-execution"],
+    ["budget_exhausted", "action-execution"],
+    ["read_write_dependency", "action-execution"],
+    ["duplicate_write", "action-execution"],
+    ["tool_not_loaded", "action-execution"],
+    ["stale_catalog_hash", "action-execution"],
+    ["unknown_tool", "action-execution"],
+    ["cancelled_before_dispatch", "action-execution"],
+    ["not_admitted", "action-execution"],
+    ["read_dispatch_failed", "action-execution"],
+    // routes/v2-chat-pipeline.ts:49,131
+    ["installation_changed", "v2-chat-pipeline"],
+  ])("%s (from %s) parses to itself, not to a fallback", (code) => {
+    expect(asTerminalReason(code)).toBe(code);
+  });
+});
+
 describe("terminal reason parsing is closed", () => {
   it("passes through every known reason unchanged", () => {
     for (const reason of TERMINAL_REASONS) {
@@ -63,16 +106,27 @@ describe("terminal reason parsing is closed", () => {
       "nope",
       "",
       'Clockify POST /workspaces/64ad1305c701cc5be7c26fe4/tags -> 500: {"x":1}',
-      // The open `invalid_*` family that operation-preparation-service.ts:475
-      // admits, and the `code: cause` shape action-execution-service.ts:485
-      // builds — neither is a member, and neither may reach an admin.
-      "invalid_something_new",
+      // The `code: cause` shape action-execution-service.ts:485 used to build.
       "write_port_not_ready: Error: eyJhbGciOiJIUzI1NiJ9.x.y",
       "TOO_MANY_REFINEMENTS",
     ];
     for (const raw of hostile) {
       expect(asTerminalReason(raw), `parse of ${JSON.stringify(raw)}`).toBe("internal_error");
     }
+  });
+
+  it("routes the open invalid_* family to one honest sentence, not to our fault", () => {
+    // operation-preparation-service.ts:475 denies on a PREFIX, so this family
+    // cannot be enumerated. Blaming our side ("something went wrong on my
+    // side") would send an admin to support over their own wording.
+    for (const raw of ["invalid_something_new", "invalid_membership_rate", "invalid_query"]) {
+      expect(asTerminalReason(raw)).toBe("invalid_request");
+    }
+    expect(copyFor("invalid_request")).not.toBe(copyFor("internal_error"));
+    // Still a constant even when the prefix arrives on a hostile string.
+    const hostile = "invalid_args for 64ad1305c701cc5be7c26fe4 eyJhbGciOiJIUzI1NiJ9.x.y";
+    expect(copyFor(asTerminalReason(hostile))).not.toContain("64ad1305c701cc5be7c26fe4");
+    expect(copyFor(asTerminalReason(hostile))).not.toContain("eyJhbGciOiJIUzI1NiJ9");
   });
 
   it("gives a parsed unknown the same copy as a real internal error", () => {

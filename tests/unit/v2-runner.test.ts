@@ -345,6 +345,48 @@ describe("prepareWrites denial journaling (review-gate HIGH-2)", () => {
     expect(deps.eventService.completeTool).not.toHaveBeenCalled();
     expect(deps.eventService.suspendRun).not.toHaveBeenCalled();
   });
+
+  /**
+   * A THROWN preparation failure. The cause must stay diagnosable — an outage
+   * once hid behind an opaque `write_port_not_ready` — but appending it to the
+   * denial CODE put a raw `error.message` on the admin-facing path, since this
+   * code becomes `lastDenialCode` and then `outcome.code`. The cause belongs in
+   * the operator log; the code stays a parsed reason.
+   */
+  it("parses a thrown preparation failure instead of appending its message to the code", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const state = stateForWrites();
+    const hostile = "connect ECONNREFUSED 64ad1305c701cc5be7c26fe4 eyJhbGciOiJIUzI1NiJ9.x.y";
+    const deps = fakeDeps({
+      preparations: { prepare: vi.fn(async () => { throw new Error(hostile); }) },
+      runStore: {
+        startRunWithTurn: vi.fn(),
+        startRunWithEvent: vi.fn(),
+        getRun: vi.fn(() => state),
+        saveRun: vi.fn(),
+        getLastRunEventSequence: vi.fn(() => 1),
+        findLatestEligibleRunForCache: vi.fn(() => undefined),
+        failActiveRunsForSession: vi.fn(() => 0),
+      } as unknown as RunnerDependencies["runStore"],
+    });
+    const service = createActionExecutionService(deps);
+    const result = await service.prepareWrites(
+      state,
+      [{ id: "w1", name: "clockify_tags_delete", arguments: { id: "a".repeat(24) } }],
+      "fallback",
+    );
+
+    const codes = result.observations.map((o) => ("code" in o ? o.code : undefined));
+    expect(codes).toEqual(["write_port_not_ready"]);
+    expect(JSON.stringify(result.observations)).not.toContain("64ad1305c701cc5be7c26fe4");
+    expect(JSON.stringify(result.observations)).not.toContain("eyJhbGciOiJIUzI1NiJ9");
+
+    // The cause is not lost — it goes to the operator log, classified.
+    const logged = errorLog.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    expect(logged).toContain("event=write_preparation_failed");
+    expect(logged).not.toContain("64ad1305c701cc5be7c26fe4");
+    errorLog.mockRestore();
+  });
 });
 
 describe("executeReadsConcurrently", () => {

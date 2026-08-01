@@ -4,10 +4,11 @@
  *
  * Two things forced this to be a type rather than a string. An internal enum was
  * rendered verbatim to an admin ("Assistant run failed: too_many_refinements"), and
- * two separate sites could put an arbitrary caught `error.message` in the same field
- * (`runner.ts` on a failed model call, `action-execution-service.ts` on a failed read
- * dispatch) — the class of value commit 75a87a8 proved carries admin-authored text,
- * workspace-id fragments and JWT prefixes.
+ * FOUR separate sites could put an arbitrary caught `error.message` in the same
+ * field: `runner.ts` on a failed model call, and `action-execution-service.ts` on a
+ * failed read dispatch, a failed write preparation, and the not-admitted tail — the
+ * class of value commit 75a87a8 proved carries admin-authored text, workspace-id
+ * fragments and JWT prefixes.
  *
  * `copyFor` is total over `TerminalReason`. Adding a member without copy is a compile
  * error, which is the point: the next reason cannot ship as a raw enum.
@@ -21,10 +22,15 @@
  *     `operation-preparation-service.ts` and `read-execution.ts`, which reach the
  *     same field through `lastDenialCode`.
  *
- * That last source is NOT closed at the type level: `receipt.code` is `string` and
- * `operation-preparation-service.ts:475` admits an open `invalid_*` prefix family.
- * `asTerminalReason` is therefore load-bearing rather than decorative — it is what
- * makes the admin-facing field closed despite an open producer.
+ * That last source is NOT closed at the type level: `receipt.code` is `string` — 85
+ * distinct receipt codes exist in `src/harness` today — and
+ * `operation-preparation-service.ts:475` admits an open `invalid_*` prefix family of
+ * 35 members. Enumerating all of them would be noise; `asTerminalReason` is therefore
+ * load-bearing rather than decorative — it is what makes the admin-facing field closed
+ * despite a producer that types cannot close.
+ *
+ * `tests/unit/terminal-reason.test.ts` pins the codes those producers can actually
+ * REACH this field with, so a new one is caught rather than silently degrading.
  */
 export type TerminalReason =
   | "cancelled"
@@ -53,7 +59,10 @@ export type TerminalReason =
   | "host_call_budget_exceeded"
   | "clarification_required"
   | "presentation_limit_exceeded"
-  | "read_dispatch_failed";
+  | "read_dispatch_failed"
+  | "invalid_request"
+  | "cancelled_before_dispatch"
+  | "not_admitted";
 
 /** Every reason, for exhaustiveness tests. Keep in sync with the union above. */
 export const TERMINAL_REASONS: readonly TerminalReason[] = [
@@ -84,6 +93,9 @@ export const TERMINAL_REASONS: readonly TerminalReason[] = [
   "clarification_required",
   "presentation_limit_exceeded",
   "read_dispatch_failed",
+  "invalid_request",
+  "cancelled_before_dispatch",
+  "not_admitted",
 ] as const;
 
 /**
@@ -93,17 +105,27 @@ export const TERMINAL_REASONS: readonly TerminalReason[] = [
  * Never widen this to pass the input through.
  */
 export function asTerminalReason(raw: string): TerminalReason {
-  return (TERMINAL_REASONS as readonly string[]).includes(raw)
-    ? (raw as TerminalReason)
-    : "internal_error";
+  if ((TERMINAL_REASONS as readonly string[]).includes(raw)) return raw as TerminalReason;
+  // `operation-preparation-service.ts:475` denies on `code.startsWith("invalid_")`,
+  // an OPEN family: 35 distinct `invalid_*` codes exist in `src/` today and
+  // nothing stops a 36th. Enumerating them would add 35 near-identical
+  // sentences, but collapsing them to `internal_error` tells the admin
+  // something went wrong on OUR side when the request itself was malformed —
+  // a false attribution that sends them to support instead of to their own
+  // wording. They share one honest sentence instead.
+  //
+  // Safe against a hostile message that merely starts with those bytes: the
+  // result is still a constant, never the input.
+  if (raw.startsWith("invalid_")) return "invalid_request";
+  return "internal_error";
 }
 
 /**
  * Total. The `never` binding fails compilation if a member has no copy.
  *
  * `internal_error` serves double duty: a reason the runner names itself, and the
- * fallback `asTerminalReason` returns for anything unrecognized. Its sentence is
- * written to read correctly for both.
+ * fallback `asTerminalReason` returns for anything unrecognized that is not
+ * `invalid_*`. Its sentence is written to read correctly for both.
  */
 export function copyFor(reason: TerminalReason): string {
   switch (reason) {
@@ -159,6 +181,12 @@ export function copyFor(reason: TerminalReason): string {
       return "I needed you to choose between a few options before I could carry on, and the run ended first. Nothing was changed. Please ask again.";
     case "presentation_limit_exceeded":
       return "That change was too large for me to show you for review, so I stopped. Nothing was changed. Try it in smaller pieces.";
+    case "invalid_request":
+      return "I could not build a valid request for what you asked, so I stopped rather than send it. Nothing was changed. Try rephrasing with the specific details you want.";
+    case "cancelled_before_dispatch":
+      return "That request was cancelled before this step started, so it never ran. Nothing was changed.";
+    case "not_admitted":
+      return "I stopped partway through and did not start the remaining steps. Nothing was changed. Please try again.";
     case "read_dispatch_failed":
       return "I could not read from Clockify to finish that request. Nothing was changed. Please try again in a moment.";
     default: {

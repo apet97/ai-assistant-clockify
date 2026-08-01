@@ -425,7 +425,6 @@ export function createActionExecutionService(
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
     }
     let preparation: WritePreparationOutcome;
-    let thrownCause: string | undefined;
     try {
       // `scopedRun(state)` carries the run id. Forwarding the runner's bare
       // `scope` here is what made every production write fail: preparation
@@ -435,7 +434,7 @@ export function createActionExecutionService(
       // Discarding the exception here made every unexpected preparation failure
       // present as the same opaque `write_port_not_ready`, which is how the
       // real cause of a production outage stayed invisible.
-      thrownCause = error instanceof Error ? error.message : String(error);
+      console.error(`[v2-run] event=write_preparation_failed ${classifyLoggableError(error)}`);
       preparation = { kind: "not_ready", code: "write_port_not_ready", actionResultId: "prep-failed" };
     }
     if (preparation.kind === "prepared") {
@@ -491,7 +490,13 @@ export function createActionExecutionService(
         observations.push({
           kind: "denied",
           actionName: call.name,
-          code: boundedDenialCode(thrownCause ? `${preparation.code}: ${thrownCause}` : preparation.code),
+          // The FOURTH interpolation site. `thrownCause` exists so an
+          // unexpected preparation failure is not invisible — a real outage
+          // hid behind an opaque `write_port_not_ready` once — but appending
+          // it to the CODE put a raw `error.message` on the same admin-facing
+          // path as the other three. The cause keeps its diagnostic job in the
+          // operator log; the code stays a parsed reason.
+          code: asTerminalReason(preparation.code),
         });
       }
     }
