@@ -12,7 +12,7 @@ import { createWorkspaceMutationCoordinator } from "../../src/clockify/workspace
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { computeOrderedTupleHash } from "../../src/db/store/confirmation-batches.js";
 import { createPendingConfirmation, rotatePendingNonce } from "../../src/harness/confirmations.js";
-import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { createFakeWorkspace, FAKE_MUTATION_METHOD_PATTERN } from "../helpers/fake-clockify.js";
 import { WRITE_PREVIEW_BASE_SEED, WRITE_PREVIEW_FIXTURES } from "../helpers/v2-write-preview-fixtures.js";
 import { createApp } from "../../src/server.js";
 import { makeTestConfig } from "../helpers/config.js";
@@ -40,6 +40,15 @@ afterEach(() => {
 
 function mutationCallTotal(counts: Record<string, number>): number {
   return Object.values(counts).reduce((sum, count) => sum + count, 0);
+}
+
+/** WRITES only. `counts` also tracks reads (the route's role recheck is one),
+ * so a total-call delta cannot answer "did anything dispatch?". Uses the fake's
+ * own exported pattern so this can never disagree about what a write is. */
+function writeCallTotal(counts: Record<string, number>): number {
+  return Object.entries(counts)
+    .filter(([method]) => FAKE_MUTATION_METHOD_PATTERN.test(method))
+    .reduce((sum, [, count]) => sum + count, 0);
 }
 
 function cookieForSession(
@@ -460,5 +469,87 @@ describe("v2 confirmation batches", () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.status).toBe("succeeded");
     expect(res.body.items).toHaveLength(2);
+  });
+
+  /**
+   * C12, at the ROUTE. The service-level bypass rejection is covered above, but
+   * a batch member POSTed to the PER-ITEM route never reached it.
+   *
+   * `isV2Preview` is `isV2AssistantPreviewConfirmation`, which requires
+   * `!record.batchId`, so a batch-owned v2 row failed that test and fell
+   * through to v1's `commitConfirmation` — which rejected it for carrying no
+   * capability (v2 previews never do) with "This preview predates the current
+   * intent-safety contract." The preview does not predate anything; it was
+   * sent to the wrong route. Fail-closed, but the explanation was false and it
+   * is the reason the v1 arm cannot be retired.
+   *
+   * The batch here is a REAL two-write preparation, not a hand-set batchId.
+   */
+  it("rejects a batch member at the per-item confirm route with a truthful reason", async () => {
+    const scope = {
+      sessionId: "",
+      runId: "run-batch-single-route",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon" as const,
+    };
+    const { fake, store, session, prepared, clock } = await prepareIndependentCreates(scope, {
+      now: () => new Date(),
+    });
+    expect(prepared.kind).toBe("prepared");
+    if (prepared.kind !== "prepared") return;
+    // The producer really does batch two independent writes.
+    expect(prepared.batchId).toBeTruthy();
+    expect(prepared.confirmationIds).toHaveLength(2);
+
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: "ai-assistant",
+      sessionSecret: SESSION_SECRET,
+      assistantEngine: "v2",
+    });
+    const app = createApp({
+      config,
+      store,
+      parser: createSignatureParser("ai-assistant", keys.pem),
+      modelClient: selectModelClient(config),
+      clockifyForWorkspace: () => fake.client,
+    });
+    const cookie = cookieForSession(session, scope);
+
+    const confirmationId = prepared.confirmationIds[0]!;
+    const pending = store.getPendingConfirmation(confirmationId)!;
+    expect(pending.batchId).toBeTruthy();
+    const rotated = rotatePendingNonce({
+      record: pending,
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionSecret: SESSION_SECRET,
+      nonce: "single-route",
+      now: clock(),
+    });
+    if (!rotated.ok) throw new Error("rotate failed");
+    store.updateConfirmationNonceHash(confirmationId, rotated.record.nonceHash);
+
+    const writesBefore = writeCallTotal(fake.counts);
+    const res = await request(app)
+      .post(`/api/confirmations/${confirmationId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: rotated.nonce });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("batch_confirmation_required");
+    expect(res.body.message).toContain("batch confirmation route");
+    // The false explanation must not come back.
+    expect(res.body.code).not.toBe("incompatible_confirmation");
+    expect(JSON.stringify(res.body)).not.toContain("predates");
+    // Still fail-closed: nothing dispatched, and the row stays confirmable
+    // through the batch route.
+    expect(writeCallTotal(fake.counts)).toBe(writesBefore);
+    expect(writesBefore).toBe(0);
+    expect(store.getPendingConfirmation(confirmationId)?.status).toBe("pending");
   });
 });

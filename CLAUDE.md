@@ -212,11 +212,19 @@ confirmation, undo, and external dispatch is uncached.
   (`src/routes/control-plane.ts:297-308`), while a v2 preview is routed to
   `confirmationService.confirmSingle` (`src/routes/confirmations.ts:51-58` via
   `isV2AssistantPreviewConfirmation`) and re-checks nonce + action fingerprint +
-  catalog hash + policy + generation without a capability. Known edge, recorded
-  in C12: a BATCHED v2 row POSTed to the single-confirm route is not
-  `isV2AssistantPreviewConfirmation` (it requires `!batchId`), falls through to
-  v1's path, and is rejected there for the missing capability — fail-closed, but
-  it is why the v1 arm cannot simply be deleted before that route is guarded.
+  catalog hash + policy + generation without a capability. **C12 is now guarded
+  and no longer blocks v1 removal.** A BATCHED v2 row is still not
+  `isV2AssistantPreviewConfirmation` (it requires `!batchId`), but the
+  single-confirm route now rejects batch-owned rows with
+  `batch_confirmation_required` BEFORE the v1/v2 discriminator, mirroring the
+  guard cancel has had since PR 4 and matching the code
+  `confirmationService.confirmSingle` already returned for that case
+  (`src/services/confirmation-service.ts:220`) but could never reach. Previously
+  such a row fell through to v1 and was rejected for the missing capability with
+  "This preview predates the current intent-safety contract" — fail-closed, but
+  a false explanation for a current, valid preview sent to the per-item route.
+  Batches are v2-only (`chat-pipeline.ts` creates none), so the guard cannot
+  change a v1 outcome. Pinned by `tests/integration/v2-confirmation-batch.test.ts`.
 - Write authority is **engine-specific**:
   - **v1 (the tested rollback) — the isolated intent-declaration pass.** Before
     the main planner receives Clockify results, an isolated declaration pass

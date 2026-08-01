@@ -43,6 +43,30 @@ export function confirmationsRouter(options: {
     if (!record) {
       return res.status(404).json({ ok: false, code: "not_found", message: "No such pending preview." });
     }
+    // C12. This guard mirrors the one cancel has had since closure-plan PR 4,
+    // and it must run BEFORE the v1/v2 discriminator below.
+    //
+    // `isV2Preview` is `isV2AssistantPreviewConfirmation`, which requires
+    // `!record.batchId` (harness/confirmations.ts:419). A BATCH-OWNED v2 row
+    // therefore failed that test and fell through to v1's `commitConfirmation`,
+    // which rejected it for having no capability — v2 previews never carry one
+    // — with "This preview predates the current intent-safety contract."
+    // That sentence is false: the preview is current and valid, it was simply
+    // sent to the per-item route instead of the batch route.
+    //
+    // `confirmSingle` already returns the TRUTHFUL rejection for this exact
+    // case (confirmation-service.ts:220), but routing meant it could never run
+    // for it. Same code as the service, so one condition has one code.
+    //
+    // Batches are v2-only (`chat-pipeline.ts` creates none), so this cannot
+    // change a v1 outcome.
+    if (options.isBatchOwned?.(record)) {
+      return res.status(400).json({
+        ok: false,
+        code: "batch_confirmation_required",
+        message: "This preview belongs to a Confirm all batch. Use the batch confirmation route.",
+      });
+    }
 
     const requestAbort = requestAbortScope(req, res);
     let committed: Awaited<ReturnType<typeof commitConfirmation>>;
