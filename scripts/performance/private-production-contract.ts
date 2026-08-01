@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { assertProductVersion } from "../lib/candidate-product-version.js";
 
 import {
   FAST_4G_PROFILE,
@@ -96,6 +97,8 @@ export interface PrivateProductionEvidenceInput {
   measurementStartedAt: string;
   generatedAt: string;
   commitSha: string;
+  /** The version `commitSha`'s own `package.json` declares (`candidateProductVersion`). */
+  productVersion: string;
   deployed: DeployedReleaseBinding;
   node: string;
   browserVersion: string;
@@ -214,6 +217,10 @@ export function validateDeployedRelease(
   value: unknown,
   expectedSha: string,
   expectedBuildHash: string,
+  /** The product version the CANDIDATE declares, from `candidateProductVersion`.
+   * Never a literal: see `scripts/lib/candidate-product-version.ts` for why a
+   * hardcoded 1.0.0 or 2.0.0 is wrong for one of the two supported engines. */
+  expectedVersion: string,
 ): DeployedReleaseBinding {
   if (!SHA_PATTERN.test(expectedSha)) {
     throw new Error("expected release SHA is invalid");
@@ -221,12 +228,13 @@ export function validateDeployedRelease(
   if (!SHA256_PATTERN.test(expectedBuildHash)) {
     throw new Error("expected release build hash is invalid");
   }
+  assertProductVersion(expectedVersion, "expected product version");
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("deployed release metadata is invalid");
   }
   const metadata = value as Record<string, unknown>;
-  if (metadata.version !== "1.0.0") {
-    throw new Error("deployed version is not 1.0.0");
+  if (metadata.version !== expectedVersion) {
+    throw new Error(`deployed version is not ${expectedVersion}`);
   }
   if (metadata.releaseSha !== expectedSha) {
     throw new Error("deployed release SHA does not match the attested release");
@@ -283,13 +291,13 @@ export function buildPrivateProductionEvidence(
   input: PrivateProductionEvidenceInput,
 ): PrivateProductionEvidence {
   const deployed = validateDeployedRelease({
-    version: "1.0.0",
+    version: input.productVersion,
     releaseSha: input.commitSha,
     buildHash: input.deployed.releaseBuildHash,
     serverArtifactSha256: input.deployed.serverArtifactSha256,
     sourceRelationship: input.deployed.sourceRelationship,
     sourceBindingSha256: input.deployed.sourceBindingSha256,
-  }, input.commitSha, input.deployed.releaseBuildHash);
+  }, input.commitSha, input.deployed.releaseBuildHash, input.productVersion);
   const measurementStartedAt = requireIsoTimestamp(input.measurementStartedAt, "measurement start");
   const measurementCompletedAt = requireIsoTimestamp(input.generatedAt, "measurement completion");
   if (

@@ -57,6 +57,7 @@ function releaseInputs() {
     measurementStartedAt: "2026-07-19T00:02:00.000Z",
     generatedAt: "2026-07-19T00:03:00.000Z",
     commitSha: SHA.candidate,
+    productVersion: "1.0.0",
     deployed: {
       releaseBuildHash: SHA.archive,
       serverArtifactSha256: SHA.server,
@@ -320,7 +321,7 @@ describe("canonical release-evidence import", () => {
   it("validates timestamped sources and writes only the exact deterministic workflow filenames", () => {
     const root = mkdtempSync(join(tmpdir(), "release-evidence-import-"));
     const paths = writeInputs(root);
-    const result = importReleaseEvidence({ root, sourceCandidateSha: SHA.candidate, ...paths });
+    const result = importReleaseEvidence({ root, sourceCandidateSha: SHA.candidate, productVersionResolver: () => "1.0.0", ...paths });
 
     for (const path of Object.values(CANONICAL_RELEASE_EVIDENCE_PATHS)) {
       expect(existsSync(join(root, path))).toBe(true);
@@ -348,7 +349,7 @@ describe("canonical release-evidence import", () => {
       const input = releaseInputs();
       mutate(input);
       const paths = writeInputs(root, input);
-      expect(() => importReleaseEvidence({ root, sourceCandidateSha: SHA.candidate, ...paths })).toThrow();
+      expect(() => importReleaseEvidence({ root, sourceCandidateSha: SHA.candidate, productVersionResolver: () => "1.0.0", ...paths })).toThrow();
       expect(existsSync(join(root, CANONICAL_RELEASE_EVIDENCE_PATHS.privateProduction))).toBe(false);
     }
   });
@@ -367,8 +368,8 @@ describe("canonical release-evidence import", () => {
     right.memberDenial = reverse(right.memberDenial as Record<string, unknown>) as never;
     right.deployedManifest = reverse(right.deployedManifest) as never;
 
-    importReleaseEvidence({ root: leftRoot, sourceCandidateSha: SHA.candidate, ...writeInputs(leftRoot, left) });
-    importReleaseEvidence({ root: rightRoot, sourceCandidateSha: SHA.candidate, ...writeInputs(rightRoot, right) });
+    importReleaseEvidence({ root: leftRoot, sourceCandidateSha: SHA.candidate, productVersionResolver: () => "1.0.0", ...writeInputs(leftRoot, left) });
+    importReleaseEvidence({ root: rightRoot, sourceCandidateSha: SHA.candidate, productVersionResolver: () => "1.0.0", ...writeInputs(rightRoot, right) });
     for (const path of Object.values(CANONICAL_RELEASE_EVIDENCE_PATHS)) {
       expect(readFileSync(join(leftRoot, path), "utf8")).toBe(readFileSync(join(rightRoot, path), "utf8"));
     }

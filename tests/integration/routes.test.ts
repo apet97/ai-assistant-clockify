@@ -204,7 +204,7 @@ describe("routes", () => {
     expect(res.status).toBe(200);
     expect(res.headers["cache-control"]).toContain("no-store");
     expect(res.body).toEqual({
-      version: "1.0.0",
+      version: "2.0.0",
       releaseSha: "a".repeat(40),
       buildHash: "b".repeat(64),
       serverArtifactSha256: "c".repeat(64),

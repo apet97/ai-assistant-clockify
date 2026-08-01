@@ -35,6 +35,17 @@ const ICON_PNG_PATH = join(OUTPUT_ROOT, "icon.png");
 const BANNER_SVG_PATH = join(OUTPUT_ROOT, "banner.svg");
 const BANNER_PNG_PATH = join(OUTPUT_ROOT, "banner.png");
 
+/**
+ * Deliberately a LITERAL, not `JSON.parse(readFile("package.json")).version`.
+ * `package.json` is not one of `MARKETPLACE_CAPTURE_SOURCE_PATHS`, so a
+ * runtime read would let the recorded `captureSourceSha256` stay unchanged
+ * while the generator emitted a differently named delivery asset — an evidence
+ * hole. This file IS hashed, so the literal keeps the capture source honest.
+ * `tests/unit/marketplace-package.test.ts` pins it to the package version so
+ * the two can never drift silently.
+ */
+const DEMO_VIDEO_FILENAME = "ai-assistant-2.0.0-demo.mp4";
+
 const screenshotFiles = [
   "01-first-run-permissions.png",
   "02-read-and-receipt.png",
@@ -814,7 +825,7 @@ async function verifyMedia(videoPath: string): Promise<MediaEvidence[]> {
 async function main(): Promise<void> {
   await mkdir(SCREENSHOT_ROOT, { recursive: true });
   await mkdir(VIDEO_ROOT, { recursive: true });
-  const videoPath = join(VIDEO_ROOT, "ai-assistant-1.0.0-demo.mp4");
+  const videoPath = join(VIDEO_ROOT, DEMO_VIDEO_FILENAME);
   const deliveryAssetPaths = [
     ICON_PNG_PATH,
     BANNER_PNG_PATH,

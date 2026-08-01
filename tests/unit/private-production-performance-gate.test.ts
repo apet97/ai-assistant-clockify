@@ -23,6 +23,7 @@ function passingInput() {
     measurementStartedAt: "2026-07-17T23:50:00.000Z",
     generatedAt: "2026-07-18T00:00:00.000Z",
     commitSha: SHA,
+    productVersion: "1.0.0",
     deployed: {
       releaseBuildHash: "b".repeat(64),
       serverArtifactSha256: "c".repeat(64),
@@ -137,27 +138,27 @@ describe("private production performance gate contract", () => {
       sourceRelationship: "exact_head",
       sourceBindingSha256: null,
     };
-    expect(() => validateDeployedRelease(exact, SHA, "b".repeat(64)))
+    expect(() => validateDeployedRelease(exact, SHA, "b".repeat(64), "1.0.0"))
       .not.toThrow();
-    expect(validateDeployedRelease(exact, SHA, "b".repeat(64))).toEqual({
+    expect(validateDeployedRelease(exact, SHA, "b".repeat(64), "1.0.0")).toEqual({
       releaseBuildHash: "b".repeat(64),
       serverArtifactSha256: "c".repeat(64),
       sourceRelationship: "exact_head",
       sourceBindingSha256: null,
     });
-    expect(() => validateDeployedRelease({ ...exact, releaseSha: "c".repeat(40) }, SHA, "b".repeat(64)))
+    expect(() => validateDeployedRelease({ ...exact, releaseSha: "c".repeat(40) }, SHA, "b".repeat(64), "1.0.0"))
       .toThrow(/deployed release/);
-    expect(() => validateDeployedRelease({ ...exact, buildHash: null }, SHA, "b".repeat(64)))
+    expect(() => validateDeployedRelease({ ...exact, buildHash: null }, SHA, "b".repeat(64), "1.0.0"))
       .toThrow(/build metadata/);
-    expect(() => validateDeployedRelease({ ...exact, version: "0.1.0" }, SHA, "b".repeat(64)))
+    expect(() => validateDeployedRelease({ ...exact, version: "0.1.0" }, SHA, "b".repeat(64), "1.0.0"))
       .toThrow(/version/);
-    expect(() => validateDeployedRelease({ ...exact, sourceRelationship: "builder_attested" }, SHA, "b".repeat(64)))
+    expect(() => validateDeployedRelease({ ...exact, sourceRelationship: "builder_attested" }, SHA, "b".repeat(64), "1.0.0"))
       .toThrow(/source relationship/);
     expect(() => validateDeployedRelease({
       ...exact,
       sourceRelationship: "source_bound_builder",
       sourceBindingSha256: "d".repeat(64),
-    }, SHA, "b".repeat(64))).not.toThrow();
+    }, SHA, "b".repeat(64), "1.0.0")).not.toThrow();
   });
 
   it("requires exactly twenty samples for every production metric", () => {

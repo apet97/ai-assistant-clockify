@@ -22,6 +22,7 @@ import {
   type PrivateProductionSamples,
   type PrivateProductionSourceRelationship,
 } from "../performance/private-production-contract.js";
+import { candidateProductVersion } from "../lib/candidate-product-version.js";
 import {
   classifyHistoricalV1Evidence,
   type EvidenceTargetAssistantEngine,
@@ -39,6 +40,9 @@ export interface PrivateProductionReleaseEvidenceInput {
   evidence: unknown;
   deployedVersion: unknown;
   expectedCandidateSha: string;
+  /** Injected only by unit tests, whose candidate SHA is synthetic and has no
+   * commit to read. Production always resolves the real candidate's version. */
+  productVersionResolver?: (releaseSha: string) => string;
 }
 
 export interface PrivateProductionReleaseValidation extends HistoricalV1EvidenceClassification {
@@ -357,6 +361,9 @@ export function validatePrivateProductionReleaseEvidence(
     input.deployedVersion,
     expectedCandidateSha,
     source.releaseBuildHash,
+    // The attested candidate's own declared version. For the frozen v1 record
+    // this resolves to 1.0.0 exactly as before; nothing historical is rewritten.
+    (input.productVersionResolver ?? candidateProductVersion)(expectedCandidateSha),
   );
   if (deployed.serverArtifactSha256 !== source.serverArtifactSha256) {
     throw new Error("deployed runtime artifact mismatch");

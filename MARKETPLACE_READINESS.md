@@ -39,7 +39,10 @@ Review** during engineering execution.
 - [Listing copy, asset inventory, and portal field map](./docs/marketplace/01-listing-package.md)
 - [Independent reviewer instructions](./docs/marketplace/02-reviewer-package.md)
 - [Deployment, incident, reconciliation, and rollback runbook](./docs/marketplace/03-operations-evidence-rollback-package.md)
-- [Paste-ready 1.0.0 What's New entry](./docs/marketplace/04-whats-new-1.0.0.md)
+- [Paste-ready 2.0.0 What's New entry](./docs/marketplace/04-whats-new-2.0.0.md) - the
+  current v2 entry
+- [Paste-ready 1.0.0 What's New entry](./docs/marketplace/04-whats-new-1.0.0.md) -
+  retained v1 history; not for submission
 - [Public Terms source](./TERMS.md)
 - [Release-candidate evidence record](./docs/marketplace/evidence/release-candidate.md)
 - [Endpoint-to-scope contract](./docs/ENDPOINT_SCOPE_CONTRACT.md)

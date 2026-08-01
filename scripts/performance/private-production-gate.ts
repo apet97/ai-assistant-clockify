@@ -15,6 +15,7 @@ import {
 import {
   FAST_4G_PROFILE,
 } from "./local-ui-contract.js";
+import { candidateProductVersion } from "../lib/candidate-product-version.js";
 import {
   PRIVATE_PRODUCTION_SAMPLE_COUNTS,
   buildPrivateProductionEvidence,
@@ -244,6 +245,7 @@ async function requireDeployedRelease(
   session: LiveSession,
   releaseSha: string,
   releaseBuildHash: string,
+  productVersion: string,
 ): Promise<DeployedReleaseBinding> {
   let response: APIResponse;
   try {
@@ -255,7 +257,12 @@ async function requireDeployedRelease(
   }
   if (!response.ok()) fail("attestation_failed");
   try {
-    return validateDeployedRelease(await response.json() as unknown, releaseSha, releaseBuildHash);
+    return validateDeployedRelease(
+      await response.json() as unknown,
+      releaseSha,
+      releaseBuildHash,
+      productVersion,
+    );
   } catch {
     fail("attestation_failed");
   }
@@ -806,6 +813,15 @@ async function writeEvidence(
 
 async function runGate(environment: PrivateProductionEnvironment): Promise<void> {
   if (process.versions.node.split(".")[0] !== "22") fail("attestation_failed");
+  // Read from the candidate commit, not the checkout: a v1 rollback candidate
+  // declares 1.0.0 and the v2 candidate declares 2.0.0, and the deployed
+  // `/version` must equal whichever one this run is attesting.
+  let productVersion: string;
+  try {
+    productVersion = candidateProductVersion(environment.releaseSha, gitRoot());
+  } catch {
+    fail("attestation_failed");
+  }
   let browser: Browser | undefined;
   let context: BrowserContext | undefined;
   const resources: SyntheticResource[] = [];
@@ -827,7 +843,12 @@ async function runGate(environment: PrivateProductionEnvironment): Promise<void>
       expectedWorkspaceId: environment.expectedWorkspaceId,
     };
     await refreshSession(session);
-    const deployed = await requireDeployedRelease(session, environment.releaseSha, environment.releaseBuildHash);
+    const deployed = await requireDeployedRelease(
+      session,
+      environment.releaseSha,
+      environment.releaseBuildHash,
+      productVersion,
+    );
     await requireReadyPermissions(session);
     if ((await pendingPreviews(session)).length !== 0) fail("cleanup_unproven");
     gateOwnsPendingPreviews = true;
@@ -877,6 +898,7 @@ async function runGate(environment: PrivateProductionEnvironment): Promise<void>
       measurementStartedAt,
       generatedAt,
       commitSha: environment.releaseSha,
+      productVersion,
       deployed,
       node: process.version,
       browserVersion: browser.version(),

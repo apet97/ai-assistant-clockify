@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
 import { validateClockifyServiceUrl } from "../src/clockify/service-url.js";
 import { privateProductionRailwayOrigin } from "./lib/private-production-origin.js";
+import { candidateProductVersion } from "./lib/candidate-product-version.js";
 import {
   type LiveEvidenceSource,
   type MemberDenialEvidence,
@@ -55,12 +56,23 @@ export interface MemberDenialProbeInput {
   workspaceId: string;
   addonCredential: string;
   expectedSource: LiveEvidenceSource;
+  /** The product version `expectedSource.commitSha` declares. Supplied rather
+   * than hardcoded so the v1 rollback candidate (1.0.0) and the v2 candidate
+   * (2.0.0) are both validated correctly — see
+   * `scripts/lib/candidate-product-version.ts`. It is deliberately NOT a field
+   * on `LiveEvidenceSource`: that shape is recorded in immutable v1 evidence
+   * artifacts and its schema must not change. */
+  expectedProductVersion: string;
   now?: () => Date;
   fetchImpl?: MemberDenialProbeFetch;
 }
 
 function fail(): never {
   throw new Error("member_denial_probe_failed");
+}
+
+function isProductVersion(value: unknown): boolean {
+  return typeof value === "string" && /^\d+\.\d+\.\d+$/u.test(value);
 }
 
 function addonBase(raw: string): URL {
@@ -75,10 +87,10 @@ function clockifyBackend(raw: string): URL {
   }
 }
 
-function sourceMatches(actual: unknown, expected: LiveEvidenceSource): boolean {
+function sourceMatches(actual: unknown, expected: LiveEvidenceSource, expectedVersion: string): boolean {
   if (!actual || typeof actual !== "object" || Array.isArray(actual)) return false;
   const row = actual as JsonObject;
-  return row.version === "1.0.0"
+  return row.version === expectedVersion
     && row.releaseSha === expected.commitSha
     && row.buildHash === expected.releaseBuildHash
     && row.serverArtifactSha256 === expected.serverArtifactSha256
@@ -180,6 +192,7 @@ export async function runMemberDenialProbe(input: MemberDenialProbeInput): Promi
     if (
       input.workspaceId.trim() === ""
       || input.addonCredential.trim() === ""
+      || !isProductVersion(input.expectedProductVersion)
       || !SHA_PATTERN.test(input.expectedSource.commitSha)
       || !SHA256_PATTERN.test(input.expectedSource.releaseBuildHash)
       || !SHA256_PATTERN.test(input.expectedSource.serverArtifactSha256)
@@ -200,7 +213,10 @@ export async function runMemberDenialProbe(input: MemberDenialProbeInput): Promi
       { method: "GET", headers: { accept: "application/json" }, redirect: "error" },
       MAX_VERSION_BYTES,
     );
-    if (!deployed.response.ok || !sourceMatches(json(deployed.text), input.expectedSource)) return fail();
+    if (
+      !deployed.response.ok
+      || !sourceMatches(json(deployed.text), input.expectedSource, input.expectedProductVersion)
+    ) return fail();
 
     const query = new URLSearchParams({
       page: "1",
@@ -280,13 +296,18 @@ function releaseArchiveHash(cwd: string, releaseSha: string): string {
   return createHash("sha256").update(archive).digest("hex");
 }
 
-function deployedSource(value: unknown, releaseSha: string, buildHash: string): LiveEvidenceSource {
+function deployedSource(
+  value: unknown,
+  releaseSha: string,
+  buildHash: string,
+  expectedVersion: string,
+): LiveEvidenceSource {
   if (!value || typeof value !== "object" || Array.isArray(value)) return fail();
   const row = value as JsonObject;
   const relationship = row.sourceRelationship;
   const binding = row.sourceBindingSha256;
   if (
-    row.version !== "1.0.0"
+    row.version !== expectedVersion
     || row.releaseSha !== releaseSha
     || row.buildHash !== buildHash
     || typeof row.serverArtifactSha256 !== "string"
@@ -305,7 +326,12 @@ function deployedSource(value: unknown, releaseSha: string, buildHash: string): 
   };
 }
 
-async function fetchDeployedSource(addonBaseUrl: string, releaseSha: string, buildHash: string): Promise<LiveEvidenceSource> {
+async function fetchDeployedSource(
+  addonBaseUrl: string,
+  releaseSha: string,
+  buildHash: string,
+  expectedVersion: string,
+): Promise<LiveEvidenceSource> {
   const result = await boundedText(
     fetch as unknown as MemberDenialProbeFetch,
     new URL("version", addonBase(addonBaseUrl)),
@@ -313,7 +339,7 @@ async function fetchDeployedSource(addonBaseUrl: string, releaseSha: string, bui
     MAX_VERSION_BYTES,
   );
   if (!result.response.ok) return fail();
-  return deployedSource(json(result.text), releaseSha, buildHash);
+  return deployedSource(json(result.text), releaseSha, buildHash, expectedVersion);
 }
 
 function writeEvidence(path: string, evidence: MemberDenialEvidence): void {
@@ -344,14 +370,23 @@ async function main(): Promise<void> {
     return fail();
   }
   const releaseBuildHash = releaseArchiveHash(cwd, releaseSha);
+  // From the candidate commit, never the checkout: a v1 rollback attests 1.0.0
+  // and a v2 deploy attests 2.0.0, and the probe must accept exactly one.
+  const expectedProductVersion = candidateProductVersion(releaseSha, cwd);
   const addonBaseUrl = process.env.LIVE_ADDON_BASE_URL ?? process.env.BASE_URL ?? "";
-  const expectedSource = await fetchDeployedSource(addonBaseUrl, releaseSha, releaseBuildHash);
+  const expectedSource = await fetchDeployedSource(
+    addonBaseUrl,
+    releaseSha,
+    releaseBuildHash,
+    expectedProductVersion,
+  );
   const evidence = await runMemberDenialProbe({
     addonBaseUrl,
     backendUrl: required("LIVE_BACKEND_URL"),
     workspaceId: required("LIVE_WORKSPACE_ID"),
     addonCredential: required("LIVE_ADDON_TOKEN"),
     expectedSource,
+    expectedProductVersion,
   });
   writeEvidence(required("MEMBER_DENIAL_EVIDENCE_PATH"), evidence);
   process.stdout.write("Member-denial evidence passed.\n");

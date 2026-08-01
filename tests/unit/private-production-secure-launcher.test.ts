@@ -90,6 +90,7 @@ describe("secure private-production performance launcher", () => {
       parentEnvironment: environment(),
       gitHead: SHA,
       worktreeRoot: "/repo",
+      productVersionResolver: () => "1.0.0",
       nodeExecutable: "/node22/bin/node",
       fetchImpl,
       launchChild,
@@ -129,6 +130,7 @@ describe("secure private-production performance launcher", () => {
       parentEnvironment: environment(),
       gitHead: SHA,
       worktreeRoot: "/repo",
+      productVersionResolver: () => "1.0.0",
       launchChild,
     };
     await expect(runSecurePrivateProduction({
@@ -170,6 +172,7 @@ describe("secure private-production performance launcher", () => {
       parentEnvironment: environment(),
       gitHead: SHA,
       worktreeRoot: "/repo",
+      productVersionResolver: () => "1.0.0",
       fetchImpl: async () => {
         requests += 1;
         return response(200, deployedVersion());
@@ -195,6 +198,7 @@ describe("secure private-production performance launcher", () => {
       parentEnvironment: environment(),
       gitHead: SHA,
       worktreeRoot: "/repo",
+      productVersionResolver: () => "1.0.0",
       fetchImpl: async (url, init) => {
         requests.push({ url: String(url), init });
         return response(200, deployedVersion({ releaseSha: "9".repeat(40) }));

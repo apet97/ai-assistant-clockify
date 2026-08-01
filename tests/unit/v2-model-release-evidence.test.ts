@@ -188,10 +188,12 @@ function fabricatedDiscoveryReport(): Record<string, unknown> {
   });
 }
 
-/** The subset of the real `/version` payload (src/server.ts) the v2 check binds. */
+/** The subset of the real `/version` payload (src/server.ts) the v2 check binds.
+ * `version` is deliberately NOT in that bound subset (see `v2-deployed-engine.ts`);
+ * it is carried here only so the fixture matches what a v2 deployment serves. */
 function deployedVersion(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    version: "1.0.0",
+    version: "2.0.0",
     releaseSha: SHA,
     buildHash: "c".repeat(64),
     serverArtifactSha256: "d".repeat(64),

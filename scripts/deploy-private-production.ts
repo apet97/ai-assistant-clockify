@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { verifyReleaseSourceBinding } from "./lib/release-artifact-identity.js";
+import { assertProductVersion } from "./lib/candidate-product-version.js";
 
 const PROJECT_ID = "fb1fa3c6-cc28-40d8-b985-2a7ee7051304";
 const SERVICE_ID = "2656670e-39a5-40f3-af5c-56dfc637552f";
@@ -228,6 +229,15 @@ export function deployPrivateProduction(
 ): void {
   const staging = resolve(required(environment, "RELEASE_STAGING"));
   if (!statSync(staging).isDirectory()) throw new Error("RELEASE_STAGING must be a directory");
+  // The deployment label must name the version being UPLOADED. `staging` is the
+  // extracted `git archive` of the candidate, so a v1 rollback and a v2 deploy
+  // each get their OWN candidate's version in the label. Reading the mutable
+  // checkout instead would mislabel exactly the rollback case this transaction
+  // exists to protect, and a literal would mislabel one engine unconditionally.
+  const stagedProductVersion = assertProductVersion(
+    (JSON.parse(readFileSync(join(staging, "package.json"), "utf8")) as { version?: unknown }).version,
+    "staged candidate product version",
+  );
   // The bytes about to be uploaded must BE the candidate. Checking only that
   // the staging path is a directory left the binding to procedural shell in the
   // runbook, so an edited or stale staging tree would upload silently. This
@@ -277,7 +287,7 @@ export function deployPrivateProduction(
       ...Object.entries(desired).map(([key, value]) => `${key}=${value}`),
     ]);
     commandRunner("railway", ["up", staging, "--path-as-root", "-p", PROJECT_ID, "-s", SERVICE_ID,
-      "-e", ENVIRONMENT_ID, "--ci", "--message", `marketplace-1.0.0 ${desired.RELEASE_SHA}`]);
+      "-e", ENVIRONMENT_ID, "--ci", "--message", `marketplace-${stagedProductVersion} ${desired.RELEASE_SHA}`]);
   } catch (releaseError) {
     try {
       rollbackVariables(snapshot, Object.keys(desired), commandRunner);

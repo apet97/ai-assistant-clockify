@@ -349,6 +349,7 @@ describe("production member-denial probe", () => {
       workspaceId: workspaceIdentifier,
       addonCredential,
       expectedSource: source,
+      expectedProductVersion: "1.0.0",
       now: () => new Date("2026-07-19T10:05:00.000Z"),
       fetchImpl,
     });
@@ -380,6 +381,7 @@ describe("production member-denial probe", () => {
       workspaceId: "workspace",
       addonCredential: "credential",
       expectedSource: source,
+      expectedProductVersion: "1.0.0",
       now: () => new Date("2026-07-19T10:05:00.000Z"),
       fetchImpl: noMember,
     })).rejects.toThrow(/^member_denial_probe_failed$/u);
@@ -396,6 +398,7 @@ describe("production member-denial probe", () => {
       workspaceId: "workspace",
       addonCredential: "credential",
       expectedSource: source,
+      expectedProductVersion: "1.0.0",
       now: () => new Date("2026-07-19T10:05:00.000Z"),
       fetchImpl: async () => replies.shift()!,
     })).rejects.toThrow(/^member_denial_probe_failed$/u);
@@ -418,6 +421,7 @@ describe("production member-denial probe", () => {
       workspaceId: "workspace",
       addonCredential: "credential",
       expectedSource: source,
+      expectedProductVersion: "1.0.0",
       now: () => new Date("2026-07-19T10:05:00.000Z"),
       fetchImpl: async () => {
         requests += 1;

@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { resolveClockifyApiBase } from "../../src/clockify/api-base.js";
 import { validateClockifyServiceUrl } from "../../src/clockify/service-url.js";
 import { privateProductionRailwayOrigin } from "../lib/private-production-origin.js";
+import { candidateProductVersion } from "../lib/candidate-product-version.js";
 import {
   validateDeployedRelease,
   validatePrivateProductionEnvironment,
@@ -60,6 +61,9 @@ export interface SecurePrivateProductionInput {
   nodeExecutable?: string;
   fetchImpl?: SecurePerformanceFetch;
   launchChild?: SecurePerformanceChildLauncher;
+  /** Injected only by unit tests, whose candidate SHA is synthetic and has no
+   * commit to read. Production always resolves the real candidate's version. */
+  productVersionResolver?: (releaseSha: string, cwd: string) => string;
 }
 
 function fail(): never {
@@ -233,7 +237,14 @@ export async function runSecurePrivateProduction(input: SecurePrivateProductionI
     );
     if (!deployed.response.ok) return fail();
     try {
-      validateDeployedRelease(parseJson(deployed.text), input.gitHead, expectedBuildHash);
+      // The expectation comes from the CANDIDATE's own package.json, so a v1
+      // rollback (1.0.0) and a v2 deploy (2.0.0) both validate without a branch.
+      validateDeployedRelease(
+        parseJson(deployed.text),
+        input.gitHead,
+        expectedBuildHash,
+        (input.productVersionResolver ?? candidateProductVersion)(input.gitHead, input.worktreeRoot),
+      );
     } catch {
       return fail();
     }

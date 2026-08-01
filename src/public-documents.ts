@@ -50,15 +50,19 @@ const COPY: Record<PublicDocumentKind, { title: string; updated: string; section
       <h2>Outcome safety</h2>
       <p>If a receipt says partial or outcome unknown, do not repeat the write. Check Clockify first and include the visible receipt state in the support request. Undo is offered only when eligible and is not a guarantee that every Clockify change can be rolled back.</p>`,
   },
+  // This page is served identically under BOTH engines (`ASSISTANT_ENGINE`), so
+  // every sentence must be true of v1 and v2 at once. Where the two differ, say
+  // the guarantee that holds under both and name the engine for the stronger
+  // one — never state a v2-only behavior as if it were unconditional.
   security: {
     title: "Security - AI Assistant for Clockify",
-    updated: "18 July 2026",
+    updated: "1 August 2026",
     sections: `
       <h2>How actions are controlled</h2>
-      <p>The model proposes named actions; a deterministic server validates administrator role, saved permissions, declared intent, schema, risk and current installation state. The model cannot call Clockify directly and never receives Clockify credentials.</p>
-      <p>Reads return directly. Only explicitly classified safe writes may run immediately. Editing existing data and every risky write require a dry-run preview and a button confirmation. Typing “yes” never confirms a risky operation.</p>
+      <p>The model proposes named actions; a deterministic server validates administrator role, saved permissions, schema, risk and current installation state. The model cannot call Clockify directly and never receives Clockify credentials.</p>
+      <p>Reads return directly. Editing existing data and every risky write are prepared as a dry-run preview and run only after a button confirmation; on the v2 engine that applies to every change the assistant proposes, including low-risk ones. Typing “yes” never confirms an operation.</p>
       <h2>Write settlement</h2>
-      <p>Every mutation is journaled before dispatch, role and installation state are rechecked, and writes are not automatically retried after dispatch. Receipts distinguish success, partial completion, definitive failure and unknown outcome.</p>
+      <p>Every mutation is journaled before dispatch, role and installation state are rechecked, and writes are not automatically retried after dispatch. Receipts distinguish success, partial completion, definitive failure and unknown outcome; on the v2 engine a request that was already satisfied is reported separately as no change needed rather than as a plain success.</p>
       <h2>Report a vulnerability</h2>
       <p>Use the monitored contact below. Do not include live credentials or customer data. Provide a minimal reproduction and the affected route or action name.</p>`,
   },

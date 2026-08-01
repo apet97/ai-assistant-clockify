@@ -55,6 +55,9 @@ export interface ReleaseEvidenceImportInput {
   deployedVersionPath: string;
   deployedManifestPath: string;
   attestationVerificationPath: string;
+  /** Injected only by unit tests, whose candidate SHA is synthetic and has no
+   * commit to read. Production always resolves the real candidate's version. */
+  productVersionResolver?: (releaseSha: string) => string;
 }
 
 export interface ReleaseEvidenceImportResult {
@@ -156,6 +159,7 @@ export function importReleaseEvidence(input: ReleaseEvidenceImportInput): Releas
     evidence: privateProductionInput,
     deployedVersion,
     expectedCandidateSha: input.sourceCandidateSha,
+    ...(input.productVersionResolver ? { productVersionResolver: input.productVersionResolver } : {}),
   });
   const operationalValidation = validateOperationalReleaseEvidence({
     sourceCandidateSha: input.sourceCandidateSha,

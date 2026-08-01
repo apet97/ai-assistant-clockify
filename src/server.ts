@@ -118,7 +118,7 @@ export function createApp(
   app.get("/version", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({
-      version: "1.0.0",
+      version: "2.0.0",
       releaseSha: runtimeDeps.releaseArtifactIdentity?.releaseSha ?? null,
       buildHash: runtimeDeps.releaseArtifactIdentity?.releaseBuildHash ?? null,
       serverArtifactSha256: runtimeDeps.releaseArtifactIdentity?.serverArtifactSha256 ?? null,

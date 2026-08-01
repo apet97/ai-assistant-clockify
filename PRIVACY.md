@@ -164,7 +164,7 @@ them no later than the source-data retention policy permits; see `DEPLOYMENT.md`
 
 ## Sub-processors
 
-Version 1.0.0 sends model turns to DeepSeek through the existing OpenAI-compatible
+Version 2.0.0 sends model turns to DeepSeek through the existing OpenAI-compatible
 HTTPS integration (`LLM_BASE_URL`). Clockify API calls go only to validated Clockify
 service origins using the encrypted installation token. No analytics, advertising, or
 other application subprocessors are built into this repository.

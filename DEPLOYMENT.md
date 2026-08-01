@@ -619,6 +619,17 @@ git archive "$RELEASE_SHA" | tar -xf - -C "$RELEASE_STAGING"
 RELEASE_SOURCE_BINDING_SHA256="$(npx tsx scripts/release-source-binding.ts --write "$RELEASE_STAGING")"
 export RELEASE_SOURCE_BINDING_SHA256
 test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
+# The product version `/version` must report. Read from the STAGED CANDIDATE,
+# never from the working checkout: the uploaded artifact is this archive, so a
+# v1 rollback candidate correctly yields 1.0.0 while the v2 candidate yields
+# 2.0.0. A literal here would be wrong for one of the two supported engines.
+EXPECTED_PRODUCT_VERSION="$(node -e '
+  const pkg = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  if (!/^\d+\.\d+\.\d+$/.test(pkg.version ?? "")) process.exit(1);
+  process.stdout.write(pkg.version);
+' "$RELEASE_STAGING/package.json")"
+export EXPECTED_PRODUCT_VERSION
+printf '%s' "$EXPECTED_PRODUCT_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 
 export RELEASE_STAGING
 
@@ -699,7 +710,7 @@ node -e '
   const bindingModelKeys = ["provider", "model", "endpointSha256", "mode", "agentic", "toolSelect", "reasoningEffort", "thinkingMode"];
   const deployedModelKeys = bindingModelKeys.concat(["assistantEngine"]);
   const actualModel = value.modelConfiguration;
-  if (value.version !== "1.0.0" || value.releaseSha !== process.env.RELEASE_SHA ||
+  if (value.version !== process.env.EXPECTED_PRODUCT_VERSION || value.releaseSha !== process.env.RELEASE_SHA ||
       value.buildHash !== process.env.RELEASE_BUILD_HASH ||
       value.sourceRelationship !== "source_bound_builder" ||
       value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||

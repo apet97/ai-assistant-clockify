@@ -21,6 +21,7 @@ function evidence() {
     measurementStartedAt: "2026-07-17T23:50:00.000Z",
     generatedAt: "2026-07-18T00:00:00.000Z",
     commitSha: CANDIDATE_SHA,
+    productVersion: "1.0.0",
     deployed: {
       releaseBuildHash: BUILD_HASH,
       serverArtifactSha256: ARTIFACT_HASH,
@@ -60,6 +61,7 @@ describe("private-production release evidence", () => {
       evidence: artifact,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     }, "v1")).toMatchObject({
       assistantEngine: "v1",
       evidenceStatus: "historical",
@@ -69,6 +71,7 @@ describe("private-production release evidence", () => {
       evidence: artifact,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     }, "v2")).toThrow(/historical v1 evidence is not valid for v2/iu);
     expect(artifact.measurements.sha256).toBe(measurementHash);
   });
@@ -78,6 +81,7 @@ describe("private-production release evidence", () => {
       evidence: evidence(),
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toMatchObject({
       schemaVersion: 1,
       conclusion: "passed",
@@ -96,6 +100,7 @@ describe("private-production release evidence", () => {
       evidence: badMetric,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/metric/);
 
     const badCleanup = structuredClone(evidence());
@@ -104,6 +109,7 @@ describe("private-production release evidence", () => {
       evidence: badCleanup,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/cleanup/);
 
     const badNode = structuredClone(evidence());
@@ -112,12 +118,14 @@ describe("private-production release evidence", () => {
       evidence: badNode,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/Node 22/);
 
     expect(() => validatePrivateProductionReleaseEvidence({
       evidence: evidence(),
       deployedVersion: { ...deployedVersion(), serverArtifactSha256: "d".repeat(64) },
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/artifact/);
   });
 
@@ -138,6 +146,7 @@ describe("private-production release evidence", () => {
         evidence: tampered,
         deployedVersion: deployedVersion(),
         expectedCandidateSha: CANDIDATE_SHA,
+        productVersionResolver: () => "1.0.0",
       })).toThrow(/metric/);
     }
 
@@ -148,6 +157,7 @@ describe("private-production release evidence", () => {
       evidence: wrongThreshold,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/threshold/);
   });
 
@@ -156,6 +166,7 @@ describe("private-production release evidence", () => {
       measurementStartedAt: "2026-07-17T23:50:00.000Z",
       generatedAt: "2026-07-18T00:00:00.000Z",
       commitSha: CANDIDATE_SHA,
+      productVersion: "1.0.0",
       deployed: {
         releaseBuildHash: BUILD_HASH,
         serverArtifactSha256: ARTIFACT_HASH,
@@ -181,12 +192,14 @@ describe("private-production release evidence", () => {
         sourceBindingSha256: "d".repeat(64),
       },
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     }).sourceBindingSha256).toBe("d".repeat(64));
 
     expect(() => validatePrivateProductionReleaseEvidence({
       evidence: sourceBound,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/source relationship/);
   });
 
@@ -200,6 +213,7 @@ describe("private-production release evidence", () => {
       evidence: fabricatedAggregate,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/aggregate/);
 
     const failingRawMeasurements = structuredClone(evidence());
@@ -208,6 +222,7 @@ describe("private-production release evidence", () => {
       evidence: failingRawMeasurements,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/measurement|metric/);
 
     const reboundTimestamp = structuredClone(evidence());
@@ -216,6 +231,7 @@ describe("private-production release evidence", () => {
       evidence: reboundTimestamp,
       deployedVersion: deployedVersion(),
       expectedCandidateSha: CANDIDATE_SHA,
+      productVersionResolver: () => "1.0.0",
     })).toThrow(/measurement time/);
   });
 
