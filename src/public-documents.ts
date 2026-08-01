@@ -11,15 +11,15 @@ function escapeHtml(value: string): string {
 const COPY: Record<PublicDocumentKind, { title: string; updated: string; sections: string }> = {
   privacy: {
     title: "Privacy - AI Assistant for Clockify",
-    updated: "18 July 2026",
+    updated: "1 August 2026",
     sections: `
       <h2>Data used by the assistant</h2>
-      <p>The add-on sends an administrator's request, a bounded conversation window, permitted action schemas, and the Clockify results needed for that turn to DeepSeek through an OpenAI-compatible HTTPS connection. Exported files are not sent to the model.</p>
+      <p>The add-on sends an administrator's request, a bounded conversation window, permitted action schemas, and the Clockify results needed for that turn to one model provider over an OpenAI-compatible HTTPS connection. This deployment uses DeepSeek; the operator configures the provider endpoint and model, and must republish this page before pointing them elsewhere. Exported files are not sent to the model.</p>
       <p>Clockify tokens, add-on tokens, session secrets, confirmation secrets, raw HTTP headers, and the model API key are never sent to the model.</p>
       <h2>Data stored by the add-on</h2>
-      <p>Installation credentials are encrypted with AES-256-GCM. Chat and audit records are retained for 90 days by default, operational confirmation and replay records for up to 30 days, eligible undo handles for 30 minutes, and authenticated export files for up to 60 minutes. The operator may configure the chat and audit window, with a 30-day minimum.</p>
+      <p>Installation credentials are encrypted with AES-256-GCM. Chat and audit records are retained for 90 days by default, and so are the assistant's per-request run records, its bounded diagnostic run-event journal, and remembered references to Clockify entities. Confirmation, replay and clarification records are kept for up to 30 days, eligible undo handles for 30 minutes, and authenticated export files for up to 60 minutes. An unanswered clarification question expires after 5 minutes and its stored options are scrubbed. The operator may configure the chat and audit window, with a 30-day minimum.</p>
       <h2>Deletion</h2>
-      <p>Uninstalling immediately blocks new work and removes the stored installation token. Already-dispatched Clockify work is allowed to settle truthfully; the add-on then erases the workspace's stored conversations, permissions, audit data, operation records, undo records, and artifacts. Encrypted backups follow the operator's retention policy.</p>
+      <p>Uninstalling immediately blocks new work and removes the stored installation token. Already-dispatched Clockify work is allowed to settle truthfully; the add-on then erases the workspace's stored conversations, permissions, audit data, assistant run records and their event journal, remembered entity references, pending clarifications, operation records, undo records, and artifacts. Encrypted backups follow the operator's retention policy.</p>
       <h2>Questions and requests</h2>
       <p>Use the monitored contact below for privacy questions or deletion requests. Never include an API key, token, session cookie, confirmation code, or raw request header.</p>`,
   },

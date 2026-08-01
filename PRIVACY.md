@@ -48,6 +48,10 @@ workspace + admin, and is isolated per workspace.
 | Undo records | Reverse a recent creation | **30 minutes to use**; terminal metadata retained up to 30 days |
 | Turn telemetry | Model call counts / token usage / latency (cost) | 30 days |
 | Durable safety/replay state | Canonical action outcomes, immutable intent capabilities and bindings, retry replay, normalized nonsecret mutation plans, authoritative target snapshots, step reconciliation, and truthful history | 30–90 days, depending on whether the row is operational metadata or a canonical result |
+| Agent run records (`assistant_runs`) | The v2 agent's per-request working record: a verbatim copy of the admin's chat message (capped at 16,000 bytes), the run phase, the request and catalog hashes, the loaded and used action names, the bounded model continuation, and the budget/unfinished-operation state | **90 days**, the same `RETENTION_DAYS` chat/audit window (configurable, min 30), swept on `updated_at` |
+| Agent run event journal (`run_events`) | An ordered per-run diagnostic journal (run, model, discovery, tool, operation, clarification and terminal events). Every payload is a closed `.strict()` schema of ids, 64-character hex hashes, counters, action names, token counts, latency and error codes, capped at 65,536 bytes; it never carries admin-authored text or Clockify business data | No independent sweep — these rows are removed only by the `ON DELETE CASCADE` from their `assistant_runs` row, so they live exactly as long as that run record and no longer: **90 days** by default |
+| Grounded entity references (`entity_references`) | Let a follow-up request keep referring to the same Clockify thing. Stores the entity type, the Clockify id, the display name (a real workspace entity name), bounded nonsecret bindings and a binding fingerprint. The reference feature is dormant in the shipped engine by owner decision; the table and its erasure path remain | **90 days**, the same `RETENTION_DAYS` chat/audit window, swept on `updated_at`, and also removed by the `assistant_runs` cascade |
+| Pending clarifications (`pending_clarifications`) | A question the assistant asked before acting, with the model's partial arguments and the grounded candidate options offered to the admin. Both JSON columns are bounded at 16,384 bytes and can contain Clockify entity names and ids | Answerable for **5 minutes**; an unanswered row is then marked expired and its partial arguments and candidate list are scrubbed. Terminal rows (`resolved`, `continued`, `expired`, `cancelled`) are deleted **30 days** after creation. A row abandoned mid-selection (`resolving`) matches neither sweep and is removed by the `assistant_runs` cascade at the 90-day window |
 | Export artifacts | Authenticated invoice/report download | 60 minutes; hard limit 1,000,000 bytes |
 | Session records | Signed session cookie state (validity `SESSION_TTL_HOURS`, default 2h) | Pruned only after expired dependent data is gone |
 
@@ -147,7 +151,9 @@ whole-second issuer times tie.
   records a deletion tombstone. A Clockify mutation that was already dispatched is
   allowed to settle truthfully without access to the wiped persisted token. After the
   settlement barrier drains, the handler hard-deletes the workspace's installation,
-  chat, audit, permissions, sessions, operation results, undo, and artifacts. Startup
+  chat, audit, permissions, sessions, agent run records (`assistant_runs` and its
+  cascaded `run_events`), grounded entity references, pending clarifications,
+  operation results, undo, and artifacts. Startup
   completes an interrupted deletion tombstone before accepting work for that workspace.
   The workspace-unlinked retired-token digest remains solely as a replay-denial value.
   The separate lifecycle-lineage workspace fingerprint remains for at most 24 hours +
@@ -164,16 +170,26 @@ them no later than the source-data retention policy permits; see `DEPLOYMENT.md`
 
 ## Sub-processors
 
-Version 2.0.0 sends model turns to DeepSeek through the existing OpenAI-compatible
-HTTPS integration (`LLM_BASE_URL`). Clockify API calls go only to validated Clockify
-service origins using the encrypted installation token. No analytics, advertising, or
-other application subprocessors are built into this repository.
+Version 2.0.0 sends model turns to exactly one model provider: the OpenAI-compatible HTTPS
+endpoint the operator configures in `LLM_BASE_URL`, using the model named in `LLM_MODEL`.
+Neither value has a default in this repository — `LLM_PROVIDER` defaults to `http`, and
+configuration then fails to load unless the operator supplies the endpoint, key, and model
+— so the repository pins the *integration*, not the vendor. **The reference deployment, the
+admin-facing first-run disclosure (`src/ui/product.ts`), and the Marketplace listing all
+name DeepSeek, and DeepSeek is the provider an installing workspace should expect.**
+Version 1.0.0 pinned a specific DeepSeek model and thinking mode through a released binding
+record; version 2.0.0 has no released model configuration yet, so the deployed-engine
+evidence deliberately declines to attest a model setting rather than fabricate one. An
+operator who repoints `LLM_BASE_URL` at a different provider changes the sub-processor and
+must republish this disclosure before installing for anyone else. Clockify API calls go
+only to validated Clockify service origins using the encrypted installation token. No
+analytics, advertising, or other application subprocessors are built into this repository.
 
-The repository cannot prove the operator account's DeepSeek DPA, processing country or
+The repository cannot prove the operator account's provider DPA, processing country or
 region, provider retention, context-cache retention, or training posture. Those exact
-decisions and the final first-run wording are admin package 1 in
-`MARKETPLACE_READINESS.md`. The add-on must not be submitted until the published
-disclosure matches that approved record.
+decisions, the v2 model configuration itself, and the final first-run wording are admin
+package 1 in `MARKETPLACE_READINESS.md`. The add-on must not be submitted until the
+published disclosure matches that approved record.
 
 ## Contact
 
