@@ -129,11 +129,16 @@ non-executable release evidence.
   regenerated.
 - Keep the separate live-browser release evidence tied to the exact deployed commit.
   Fixture media is listing material, not proof of provider or Clockify connectivity.
-- The checked-in media set and the generator's step-3 storyboard label
-  (`scripts/generate-marketplace-media.ts`, "Safe write and immediate receipt") still
-  model version 1.0.0's immediate-safe-write semantics. The v2 engine previews that
-  case, so the regenerated set must show a preview and confirmation there; the
-  fixture, the storyboard label, and its pinned assertion move together.
+- **OPEN, and it blocks the visual review.** The media set regenerated for 2.0.0 still
+  models version 1.0.0's immediate-safe-write semantics at demo step 3: the generator's
+  storyboard label reads "Safe write and immediate receipt"
+  (`scripts/generate-marketplace-media.ts`), and the frames come from
+  `tests/e2e/fixtures/server.mjs`, which hand-authors that outcome. The v2 engine
+  previews that case, so the demo shows behaviour the shipped engine no longer has.
+  Regenerating does NOT fix it — the fixture, the storyboard label, and the pinned
+  assertion in `tests/unit/marketplace-media.test.ts` have to move together, and the
+  fixture is shared with the renderer suite. Treat it as a finding against review check
+  `video-storyboard-readable-and-secret-free`, not as a caption tweak.
 - Hide browser chrome, workspace identifiers, account email, tokens, operation secrets,
   and unrelated customer data.
 - Do not edit a receipt to imply success. Preserve partial, failed, or unknown labels if

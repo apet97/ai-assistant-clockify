@@ -3,7 +3,7 @@
   "source": "deterministic synthetic release-build fixture",
   "liveConnectivityEvidence": false,
   "containsSecrets": false,
-  "captureSourceSha256": "b5df1ca3e824b51c833b39acf5af15a463f5206b5365c5d1f7b39dc687004876",
+  "captureSourceSha256": "56bbaccd0397857d6cf7b5853c0daab20928081f61d11b7fefdc3a8b52cbd7d4",
   "visualReview": {
     "artifact": "docs/marketplace/assets/media-engineering-review.json",
     "requiredStatus": "passed"
@@ -53,50 +53,50 @@
     },
     {
       "file": "docs/marketplace/assets/banner.png",
-      "bytes": 181941,
-      "sha256": "697f4d5438b968857aa383e4d3b4cb6b9f03422febea82b108e95d7615e12bab",
+      "bytes": 183580,
+      "sha256": "ccd8f9e0d0b28380022fa08c6c91ccba2f702b0fe479f46202acb0f6a6ddd6af",
       "width": 1600,
       "height": 900
     },
     {
       "file": "docs/marketplace/assets/screenshots/01-first-run-permissions.png",
-      "bytes": 119551,
-      "sha256": "ad83185e5201cea32a5c50ddaad7adb8dce8c54572326ef778a9a29845b407cb",
+      "bytes": 119544,
+      "sha256": "50c8c905b50506576414b2f319f07d38ef40b2c3d8e374ac3b907c351051f2b6",
       "width": 1440,
       "height": 900
     },
     {
       "file": "docs/marketplace/assets/screenshots/02-read-and-receipt.png",
-      "bytes": 70077,
-      "sha256": "b1015c0eac05a336e193727427434532ff284986d228cc64810c5c55b789254e",
+      "bytes": 70089,
+      "sha256": "967f95e09bc81a7e1256d51276ad0f97aa1bafa51b9be6490298f5c592084111",
       "width": 1440,
       "height": 900
     },
     {
       "file": "docs/marketplace/assets/screenshots/03-risky-preview-confirm.png",
-      "bytes": 88005,
-      "sha256": "3b831a8fe448fdd54a7df4a1df5ee1dc108a1c8f2c2cf7bf7120b98d427a4b64",
+      "bytes": 88015,
+      "sha256": "ff208c83dbd8913abd0dc5383868dc60c4eae95f9b95c8db3a2191e6ded078d6",
       "width": 1440,
       "height": 900
     },
     {
       "file": "docs/marketplace/assets/screenshots/04-receipt-and-undo.png",
-      "bytes": 92206,
-      "sha256": "dbd652c49e48412af78f078be01870a9d2e663ba4f4d75f9f0cbceb1e373b3cb",
+      "bytes": 92207,
+      "sha256": "132b2ac072b591a45a15c1b10ab7bf4ec4a1b62d265720ce5cd4255418e15e02",
       "width": 1440,
       "height": 900
     },
     {
       "file": "docs/marketplace/assets/screenshots/05-history-and-pdf-download.png",
-      "bytes": 94751,
-      "sha256": "14a64b450711c0662afcaadb6296370c0c4a497d8bb2053ba524b82a4426b43f",
+      "bytes": 94757,
+      "sha256": "d39a377c277b2078973612c82384faca3014a96ac71d6b41913b94eb8636f5f1",
       "width": 1440,
       "height": 900
     },
     {
-      "file": "docs/marketplace/assets/video/ai-assistant-1.0.0-demo.mp4",
-      "bytes": 411504,
-      "sha256": "31f8ea323774a32e574602744b78cbd716eaaf93fae79cb6afad96d085ab75d3",
+      "file": "docs/marketplace/assets/video/ai-assistant-2.0.0-demo.mp4",
+      "bytes": 410063,
+      "sha256": "7b36aacfc2d5dbf72154fcc9769635a0c97ee23135c2cbe8fb6b753bf76fe950",
       "width": 1440,
       "height": 900,
       "durationSeconds": 35
