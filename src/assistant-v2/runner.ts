@@ -190,7 +190,12 @@ export async function runAssistantV2(
       if (error instanceof ProviderProtocolError) {
         return runs.failRun(state, error.reason);
       }
-      return runs.failRun(state, error instanceof Error ? error.message : "model_failed");
+      // The caught message is NOT a terminal reason. It reaches the admin's screen and
+      // the API `code` field, and 75a87a8 proved this class of message carries
+      // admin-authored text, workspace-id fragments and JWT prefixes. The diagnosis
+      // goes to the operator log as a bounded classification; the admin gets copy.
+      console.error(`[v2-run] event=model_call_failed ${classifyLoggableError(error)}`);
+      return runs.failRun(state, "model_failed");
     }
     state = deps.runStore.getRun(scopedRun(state)) ?? state;
     // Closure-plan PR 8 (F07): recheck the exact installation generation

@@ -16,6 +16,7 @@ import type { RunState } from "../assistant-v2/state.js";
 import { boundedDenialCode, type RunObservation } from "../assistant-v2/observations.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { scopedRun } from "./run-service.js";
+import { classifyLoggableError } from "../log-error-class.js";
 
 /**
  * ActionExecutionService (T16-C): validated tool-call execution extracted from
@@ -136,13 +137,17 @@ export async function executeReadsConcurrently(
         ordered[index] = { call, outcome };
       } catch (error) {
         stopAdmitting = true;
+        console.error(`[v2-run] event=read_dispatch_failed ${classifyLoggableError(error)}`);
         ordered[index] = {
           call,
           outcome: {
             kind: "denied",
-            code: boundedDenialCode(error instanceof Error && error.message.length > 0
-              ? error.message
-              : "read_dispatch_failed"),
+            // The caught message is NOT a denial code. `lastDenialCode` carries this
+            // value to `failRun`, so it reached the admin's screen and the API `code`
+            // field — the same leak as `runner.ts`'s model-call catch, on a path the
+            // 256-byte `boundedDenialCode` cap bounded in LENGTH but never in CONTENT.
+            // The diagnosis goes to the operator log as a bounded classification.
+            code: "read_dispatch_failed",
           },
         };
       }

@@ -11,6 +11,7 @@ import {
   type RunScope,
 } from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
+import { asTerminalReason, copyFor } from "../assistant-v2/terminal-reason.js";
 import { deterministicGuardReply } from "./chat-guards.js";
 import { WorkspaceMutationRevokedError } from "../clockify/workspace-mutation-coordinator.js";
 import { createRunEventService } from "../services/run-event-service.js";
@@ -636,9 +637,15 @@ function v2OutcomeToTurn(outcome: Awaited<ReturnType<typeof runAssistantV2>>): C
       resultLinks: [],
     };
   }
+  // `code` stays the machine-readable reason for clients and audit. `message` is
+  // deterministic admin copy — an internal enum was previously rendered verbatim.
+  // Parsing happens HERE and only here: `run-service.failRun` deliberately persists
+  // the raw code into the durable run event, because audit fidelity wants the raw
+  // value and the admin's screen does not.
+  const reason = asTerminalReason(outcome.code);
   return {
     ok: false,
-    code: outcome.code,
-    message: `Assistant run failed: ${outcome.code}`,
+    code: reason,
+    message: copyFor(reason),
   };
 }
