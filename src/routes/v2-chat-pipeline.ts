@@ -243,10 +243,11 @@ export type ClarificationResolutionPort = ReturnType<typeof createClarificationR
 /** V2 chat pipeline: native-tool runner only — never falls through to v1 planner. */
 export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
   // C10: v2 no longer instantiates v1's pipeline to borrow its control plane.
-  // `createControlPlane` supplies the seven engine-neutral members —
-  // including `commitConfirmation`, which a v2 BATCH preview row still
-  // reaches via routes/confirmations.ts:58 (isV2AssistantPreviewConfirmation
-  // excludes batched rows).
+  // `createControlPlane` supplies the seven engine-neutral members. One of
+  // them, `commitConfirmation`, USED to be reachable by a v2 BATCH preview row
+  // (isV2AssistantPreviewConfirmation excludes batched rows, so they fell
+  // through to it). The C12 guard in routes/confirmations.ts now rejects
+  // batch-owned rows before that discriminator, so no v2 row reaches it.
   const controlPlane = createControlPlane(deps).members;
   return {
     ...controlPlane,

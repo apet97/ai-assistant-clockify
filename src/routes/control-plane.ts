@@ -22,11 +22,20 @@
  *       confirmationService, permissionService, undoService and every router.
  *       Exactly one engine arm is constructed per request path.
  *
- * NOTE on `commitConfirmation`: it is NOT v1-only. `isV2AssistantPreviewConfirmation`
- * is `isV2PreviewAuthority(record) && !record.batchId` (harness/confirmations.ts:418-420),
- * and a v2 multi-write preview stamps `batch_id` on every pending row, so a v2
- * BATCH row reaching the single-confirm route falls through to this function
- * (routes/confirmations.ts:58). It must stay on the v2 surface.
+ * NOTE on `commitConfirmation`: it IS v1-only again, as of the C12 guard.
+ * `isV2AssistantPreviewConfirmation` is `isV2PreviewAuthority(record) &&
+ * !record.batchId` (harness/confirmations.ts:418-420), and a v2 multi-write
+ * preview stamps `batch_id` on every pending row — so a v2 BATCH row used to
+ * fail that test and fall through to this function. `routes/confirmations.ts`
+ * now rejects batch-owned rows with `batch_confirmation_required` BEFORE the
+ * discriminator, and this function has exactly ONE call site
+ * (routes/confirmations.ts, the non-v2 branch), so no v2 row can reach it:
+ * batch-owned rows are rejected earlier and non-batch v2 rows go to
+ * `confirmationService.confirmSingle`.
+ *
+ * Keep it that way. If a future caller is added, re-verify this before relying
+ * on the v1-only property — it is a reachability fact about one call site, not
+ * something the type system enforces.
  */
 import type { Request, Response } from "express";
 import { createHash, randomUUID } from "node:crypto";
