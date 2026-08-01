@@ -6,7 +6,7 @@ export { createEmptyRunBudget } from "./state.js";
 /** Hard-coded v2 safety ceilings — no environment flags. */
 export const V2_LIMITS = Object.freeze({
   maxModelCalls: 6,
-  maxDiscoveryCalls: 2,
+  maxDiscoveryCalls: 4,
   maxLoadedApiTools: 12,
   maxApiCalls: 12,
   maxConcurrentReads: 4,

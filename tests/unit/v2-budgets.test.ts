@@ -18,7 +18,7 @@ describe("V2_LIMITS", () => {
   it("freezes the exact safety ceilings from the v2 plan", () => {
     expect(V2_LIMITS).toEqual({
       maxModelCalls: 6,
-      maxDiscoveryCalls: 2,
+      maxDiscoveryCalls: 4,
       maxLoadedApiTools: 12,
       maxApiCalls: 12,
       maxConcurrentReads: 4,
@@ -66,9 +66,11 @@ describe("counter ceilings", () => {
     expect(budget.modelCallsUsed).toBe(6);
   });
 
-  it("allows exactly two discovery calls and rejects the third", () => {
+  it("allows exactly maxDiscoveryCalls discovery calls and rejects the next", () => {
     let budget = createEmptyRunBudget();
-    for (let i = 0; i < 2; i += 1) {
+    // Derived, not hardcoded: the exact ceiling is pinned by the frozen-limits
+    // test above, and this one pins the PREDICATE against whatever it is.
+    for (let i = 0; i < V2_LIMITS.maxDiscoveryCalls; i += 1) {
       expect(canReserveDiscoveryCall(budget)).toBe(true);
       budget = { ...budget, discoveryCallsUsed: budget.discoveryCallsUsed + 1 };
     }

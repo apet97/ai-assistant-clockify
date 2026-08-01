@@ -89,7 +89,7 @@ hand-authored frames. Prefer `tests/helpers/v2-production-composition.ts` and
 
 ### v2 budgets (`V2_LIMITS`)
 
-`maxModelCalls` 6 · `maxDiscoveryCalls` 2 · `maxLoadedApiTools` 12 ·
+`maxModelCalls` 6 · `maxDiscoveryCalls` 4 · `maxLoadedApiTools` 12 ·
 `maxApiCalls` 12 · `maxConcurrentReads` 4 · `maxHostCalls` 60 ·
 `maxWallClockMs` 300_000 · `maxTotalTokens` 64_000. All are enforced at
 runtime: logical calls reserve per batch in provider order, writes count,

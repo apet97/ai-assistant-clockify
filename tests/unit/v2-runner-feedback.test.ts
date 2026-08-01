@@ -3,6 +3,7 @@ import { runAssistantV2 } from "../../src/assistant-v2/runner.js";
 import { boundedDenialCode } from "../../src/assistant-v2/observations.js";
 import { runEventPayloadSchemas } from "../../src/assistant-v2/events.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
+import { V2_LIMITS } from "../../src/assistant-v2/budgets.js";
 import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 import type { ModelMessage, ToolCall } from "../../src/assistant/model-client.js";
 import type { RunnerDependencies, RunScope } from "../../src/assistant-v2/protocol.js";
@@ -319,7 +320,7 @@ describe("v2 tool-result feedback", () => {
     }
   });
 
-  it("denies a third discovery search instead of destroying the whole run", async () => {
+  it("denies the over-budget discovery search instead of destroying the whole run", async () => {
     // Every other budget in v2 denies the individual call and lets the run
     // continue; only discovery was fatal, so a compound request that explored
     // one search too many ("create a tag and apply it to all entries") lost
@@ -329,7 +330,9 @@ describe("v2 tool-result feedback", () => {
     const completeWithTools = vi.fn(async (messages: ModelMessage[]) => {
       seen.push(structuredClone(messages));
       call += 1;
-      if (call <= 3) {
+      // One search past the budget, derived rather than hardcoded: the first
+      // maxDiscoveryCalls succeed and the next is denied.
+      if (call <= V2_LIMITS.maxDiscoveryCalls + 1) {
         return {
           text: "",
           toolCalls: [{
@@ -350,7 +353,8 @@ describe("v2 tool-result feedback", () => {
 
     expect(outcome.kind).toBe("completed");
     // The over-budget search is reported back so the model stops searching.
-    expect(JSON.stringify(seen[3] ?? [])).toContain("too_many_refinements");
+    // The denial is reported in the NEXT request the model receives.
+    expect(JSON.stringify(seen[V2_LIMITS.maxDiscoveryCalls + 1] ?? [])).toContain("too_many_refinements");
   });
 
   it("carries the model's own answer out of the run, not a canned string", async () => {

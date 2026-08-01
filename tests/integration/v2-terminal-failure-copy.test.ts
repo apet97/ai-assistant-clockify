@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { composeV2ProductionApp } from "../helpers/v2-production-composition.js";
 import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 import { copyFor } from "../../src/assistant-v2/terminal-reason.js";
+import { V2_LIMITS } from "../../src/assistant-v2/budgets.js";
 
 /**
  * The admin-facing end of a v2 run that dies without a reply.
@@ -28,11 +29,19 @@ function search(query: string) {
 
 describe("v2 terminal failure is reported to the admin as a sentence", () => {
   it("renders admin copy, not the internal code, when discovery runs out", async () => {
-    // V2_LIMITS.maxDiscoveryCalls is 2. Two searches spend it; the third is
-    // denied `too_many_refinements`; the fourth is byte-identical, so the
-    // no-progress detector (runner.ts:301) ends the run carrying that denial.
+    // Spend the discovery budget, whatever it is: N distinct searches exhaust
+    // it, the next is denied `too_many_refinements`, and one byte-identical
+    // repeat trips the no-progress detector (runner.ts:301), which ends the run
+    // carrying that denial.
+    //
+    // Derived from V2_LIMITS rather than hardcoded, so raising the budget
+    // cannot silently turn this into a test of something else. The two extra
+    // calls are why maxDiscoveryCalls must stay <= maxModelCalls - 2: above
+    // that the run ends `budget_exhausted` and never reports the real reason.
+    const searches = Array.from({ length: V2_LIMITS.maxDiscoveryCalls }, (_, i) => search(`tags ${i}`));
+    expect(V2_LIMITS.maxDiscoveryCalls + 2).toBeLessThanOrEqual(V2_LIMITS.maxModelCalls);
     const c = await composeV2ProductionApp({
-      script: [search("tag"), search("tags create"), search("create a tag"), search("create a tag")],
+      script: [...searches, search("create a tag"), search("create a tag")],
     });
     try {
       const res = await c.chat("create tag named asdsad");
