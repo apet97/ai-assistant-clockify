@@ -377,4 +377,50 @@ describe("executeReadsConcurrently", () => {
     expect(maxActive).toBeLessThanOrEqual(4);
     expect(order).toEqual(calls.map((c) => c.id));
   });
+
+  /**
+   * The governor is the only thing that still throws out of a read (the read
+   * port itself returns outcomes). Its throw carries a MESSAGE, and that
+   * message used to become the denial code verbatim — reaching `lastDenialCode`,
+   * `failRun`, and the admin's screen.
+   *
+   * The catch must PARSE, not flatten. `requestGovernor.runRead` signals a
+   * revoked installation as `Error("installation_changed")`
+   * (`routes/v2-chat-pipeline.ts:49`), which is a real terminal reason with its
+   * own admin copy — flattening it to `read_dispatch_failed` would tell the
+   * admin to "try again in a moment" when only a reload helps. Anything else
+   * must collapse rather than travel.
+   */
+  it.each([
+    ["installation_changed", "installation_changed"],
+    ["Clockify GET /workspaces/64ad1305c701cc5be7c26fe4/tags -> 500: {\"e\":1}", "internal_error"],
+    ["eyJhbGciOiJIUzI1NiJ9.x.y delete every time entry for Ana", "internal_error"],
+  ])("parses a thrown governor message %# instead of carrying it", async (thrown, expected) => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const deps = fakeDeps({
+      requestGovernor: {
+        runRead: vi.fn(async () => {
+          throw new Error(thrown);
+        }),
+      },
+      reads: { execute: vi.fn(async () => ({ kind: "succeeded" as const, actionResultId: "r" })) },
+    });
+    const outcomes: Array<{ kind: string; code?: string }> = [];
+    await executeReadsConcurrently(
+      [{ id: "c0", name: "clockify_projects_list", arguments: {} }],
+      { ...baseScope(), runId: "run-1" },
+      deps,
+      undefined,
+      (_call, outcome) => outcomes.push(outcome),
+    );
+
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.kind).toBe("denied");
+    expect(outcomes[0]?.code).toBe(expected);
+    // Whatever the code became, the raw message never rides along.
+    if (expected === "internal_error") {
+      expect(JSON.stringify(outcomes)).not.toContain(thrown);
+    }
+    errorLog.mockRestore();
+  });
 });

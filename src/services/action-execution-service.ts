@@ -17,6 +17,7 @@ import { boundedDenialCode, type RunObservation } from "../assistant-v2/observat
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { scopedRun } from "./run-service.js";
 import { classifyLoggableError } from "../log-error-class.js";
+import { asTerminalReason } from "../assistant-v2/terminal-reason.js";
 
 /**
  * ActionExecutionService (T16-C): validated tool-call execution extracted from
@@ -147,7 +148,15 @@ export async function executeReadsConcurrently(
             // field — the same leak as `runner.ts`'s model-call catch, on a path the
             // 256-byte `boundedDenialCode` cap bounded in LENGTH but never in CONTENT.
             // The diagnosis goes to the operator log as a bounded classification.
-            code: "read_dispatch_failed",
+            //
+            // PARSE rather than flatten. `requestGovernor.runRead` signals a revoked
+            // installation by throwing `Error("installation_changed")`
+            // (`routes/v2-chat-pipeline.ts:49`), and the generation recheck at
+            // `runner.ts:200` runs BEFORE this batch — so a revocation during the
+            // reads arrives here. Collapsing every throw to `read_dispatch_failed`
+            // would tell that admin to "try again in a moment" when only a reload
+            // helps. A known reason survives; anything else becomes `internal_error`.
+            code: asTerminalReason(error instanceof Error ? error.message : "read_dispatch_failed"),
           },
         };
       }
