@@ -28,8 +28,10 @@ import { writeDeterministicJson } from "./write-json.js";
  * `tests/unit/release-evidence.test.ts` and
  * `tests/unit/workflow-contracts.test.ts` (deliberate double-entry literal
  * pins), `CLAUDE.md`, `MARKETPLACE_READINESS.md`, `AGENTS.md`,
- * `docs/marketplace/evidence/README.md`, and
- * `docs/marketplace/evidence/release-candidate.md`.
+ * `docs/marketplace/evidence/README.md`,
+ * `docs/marketplace/evidence/release-candidate.md`, and
+ * `docs/marketplace/evidence/release-candidate-v2.md` (D13: the v2 record states
+ * the same floor and the arithmetic that derives it).
  */
 export const RECORDED_SUITE_BASELINE = 5_461;
 export const ALLOWED_SUITE_SHRINK_PERCENT = 2;

@@ -4,9 +4,17 @@ This directory holds sanitized, human-readable indexes for release evidence. Raw
 artifacts, browser traces, recordings, benchmark output, backup files, provider contracts,
 credentials, contact details, and customer data stay in their approved systems.
 
-Every artifact and conclusion indexed here is historical v1 evidence. Existing
-bytes and hashes are preserved for rollback/history, but none is valid for v2 or
-can support a v2 readiness conclusion.
+Every artifact and conclusion indexed under "Historical v1 release" below is
+historical v1 evidence. Existing bytes and hashes are preserved for
+rollback/history, but none is valid for v2 or can support a v2 readiness
+conclusion. The v2 record is a separate sibling and inherits none of them.
+
+## Current v2 release
+
+- [`release-candidate-v2.md`](./release-candidate-v2.md) - the v2 engineering evidence
+  record. A row reads `PASSED` only where a result was measured; every unmet gate is
+  explicitly `PENDING <gate>`, and no placeholder reads as a pass. This is the status
+  source for v2; the historical v1 record below cannot be.
 
 ## Historical v1 release
 

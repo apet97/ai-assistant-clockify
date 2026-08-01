@@ -38,13 +38,21 @@ Review** during engineering execution.
 
 - [Listing copy, asset inventory, and portal field map](./docs/marketplace/01-listing-package.md)
 - [Independent reviewer instructions](./docs/marketplace/02-reviewer-package.md)
-- [Deployment, incident, reconciliation, and rollback runbook](./docs/marketplace/03-operations-evidence-rollback-package.md)
+- [v2 release, deploy, backup-drill, and v1-return runbook](./docs/marketplace/03-operations-v2-runbook.md) -
+  the runbook for the engine production actually serves
+- [v1 release history and the engine-neutral incident and reconciliation procedures](./docs/marketplace/03-operations-evidence-rollback-package.md) -
+  its release, deploy, and backup sections are retired v1 history and refuse release use;
+  its incident sections remain the only copy and apply to both engines
 - [Paste-ready 2.0.0 What's New entry](./docs/marketplace/04-whats-new-2.0.0.md) - the
   current v2 entry
 - [Paste-ready 1.0.0 What's New entry](./docs/marketplace/04-whats-new-1.0.0.md) -
   retained v1 history; not for submission
 - [Public Terms source](./TERMS.md)
-- [Release-candidate evidence record](./docs/marketplace/evidence/release-candidate.md)
+- [v2 release-candidate evidence record](./docs/marketplace/evidence/release-candidate-v2.md) -
+  the status source for v2; `PASSED` only where a result was measured, every unmet gate
+  explicitly pending
+- [Historical v1 release-candidate evidence record](./docs/marketplace/evidence/release-candidate.md) -
+  immutable v1 template; no row implies a pass and none is valid for v2
 - [Endpoint-to-scope contract](./docs/ENDPOINT_SCOPE_CONTRACT.md)
 
 The three Markdown packages above are release materials; they are not three extra
