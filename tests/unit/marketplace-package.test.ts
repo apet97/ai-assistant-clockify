@@ -64,8 +64,13 @@ describe("product version contract", () => {
     // The Railway deployment label is NOT pinned to this version: it must track
     // the staged candidate instead. The "no hardcoded version" test below owns it.
 
-    // Public sub-processor disclosure.
-    expect(one(privacy, /^Version (\S+) sends model turns to DeepSeek/mu, "PRIVACY sub-processor line"))
+    // Public sub-processor disclosure. The anchor deliberately stops before the
+    // provider name: D8 requalified that sentence because the repository pins no
+    // default `LLM_BASE_URL`/`LLM_MODEL`, so the vendor is an operator
+    // configuration rather than a version fact. That the disclosure still names
+    // where data actually goes is asserted in
+    // tests/unit/privacy-disclosure-contract.test.ts; this line owns the VERSION.
+    expect(one(privacy, /^Version (\S+) sends model turns to /mu, "PRIVACY sub-processor line"))
       .toBe(VERSION);
 
     // The paste-ready What's New sibling for exactly this version.

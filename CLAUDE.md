@@ -185,24 +185,64 @@ confirmation, undo, and external dispatch is uncached.
 - Per-admin, per-workspace assistant permissions; genuinely new admins default to
   full `read_write`, while missing groups in an existing policy migrate to `off`;
   admins manage only their own (owners don't see others').
-- Reads return immediately. Only actions explicitly classified `safe_write`
-  execute immediately with receipts. Risky writes require a dry-run preview +
-  BUTTON confirmation; typed "yes" never executes.
+- Reads return immediately under both engines, and typed "yes" never executes
+  anything. Immediate writes are **engine-specific**, so state the engine:
+  - **v2 (the default engine):** NOTHING the assistant proposes executes
+    immediately. `safe_write` maps to the `prepared_safe_write` executor kind,
+    which is a PREVIEW kind, not an execute kind
+    (`src/services/operation-preparation-service.ts:78-79`,
+    `src/harness/action-discriminators.ts:48`), so a low-risk write is previewed
+    and runs only after a BUTTON confirmation, exactly like a risky one. There is
+    no assistant-origin immediate-write path at all: `executeV2ApiAction` rejects
+    any origin other than `assistant` (`src/harness/actions.ts:106-117`) while
+    `TRUSTED_DIRECT_ORIGINS` — the origins allowed to execute directly — is
+    `direct_ui`/`system`/`live_test` and excludes `assistant`
+    (`src/harness/confirmations.ts:399`); `executeTrustedDirectSafeWrite`
+    (`src/services/confirmation-service.ts:353`) currently has zero callers in
+    `src/`.
+  - **v1 (the tested rollback):** only actions explicitly classified `safe_write`
+    execute immediately with receipts.
+  - **Both:** risky writes require a dry-run preview + BUTTON confirmation.
 - `Confirm all` applies only to the exact previewed batch. Confirmations are
-  one-use, 5-min TTL, bound to session/workspace/admin + nonce + operation hash +
-  immutable capability id/hash; policy, capability, catalog, and action
-  compatibility are re-checked at confirm time.
-- Before the main planner receives Clockify results, an isolated declaration pass
-  receives only current and unresolved prior admin-authored text as untrusted
-  natural-language input; its trusted envelope also supplies exact write-action
-  names, literal-controlled paths, reviewed semantic aliases, and the catalog
-  hash. The provider cites an exact quote, its authored segment, and its
-  zero-based occurrence; the server computes and verifies UTF-8 byte spans. It persists the
-  exact write authority for that request. Invalid or ambiguous citations,
-  unreviewed aliases, polarity inversions, and provider-returned tools that were
-  not offered all fail closed. A terminal authority denial uses deterministic
-  server copy and never asks the provider to reinterpret it; reads remain
-  available.
+  one-use, 5-min TTL, and bound to session/workspace/admin + nonce + operation
+  hash; policy, catalog, action compatibility, role, and installation generation
+  are re-checked at confirm time under BOTH engines. The **capability id/hash
+  binding is v1-only**: v1's `commitConfirmation` fails closed with
+  `incompatible_confirmation` on a row without one
+  (`src/routes/control-plane.ts:297-308`), while a v2 preview is routed to
+  `confirmationService.confirmSingle` (`src/routes/confirmations.ts:51-58` via
+  `isV2AssistantPreviewConfirmation`) and re-checks nonce + action fingerprint +
+  catalog hash + policy + generation without a capability. Known edge, recorded
+  in C12: a BATCHED v2 row POSTed to the single-confirm route is not
+  `isV2AssistantPreviewConfirmation` (it requires `!batchId`), falls through to
+  v1's path, and is rejected there for the missing capability — fail-closed, but
+  it is why the v1 arm cannot simply be deleted before that route is guarded.
+- Write authority is **engine-specific**:
+  - **v1 (the tested rollback) — the isolated intent-declaration pass.** Before
+    the main planner receives Clockify results, an isolated declaration pass
+    receives only current and unresolved prior admin-authored text as untrusted
+    natural-language input; its trusted envelope also supplies exact write-action
+    names, literal-controlled paths, reviewed semantic aliases, and the catalog
+    hash. The provider cites an exact quote, its authored segment, and its
+    zero-based occurrence; the server computes and verifies UTF-8 byte spans. It
+    persists the exact write authority for that request. Invalid or ambiguous
+    citations, unreviewed aliases, polarity inversions, and provider-returned
+    tools that were not offered all fail closed. A terminal authority denial uses
+    deterministic server copy and never asks the provider to reinterpret it;
+    reads remain available.
+  - **v2 (the default engine) — the preview/confirm binding IS the authority.**
+    The v1 declaration pass never runs under v2:
+    `src/assistant/intent-declaration.ts` is imported only by the v1 turn
+    machinery (`src/routes/chat-pipeline.ts`) and the eval scripts; nothing in
+    `src/assistant-v2/` or `src/services/` calls it, and
+    `tests/integration/v2-no-intent-declaration.test.ts` pins that. A v2 preview
+    carries NO `IntentCapabilityV1` by construction: `isV2PreviewAuthority`
+    requires `!record.capabilityId` (`src/harness/confirmations.ts:406-418`).
+    Authority for a v2 write comes from the admin's own button confirmation
+    against a previewed, hash-bound operation — which is why v2 previews every
+    write it proposes rather than trusting a declared span. The surrounding
+    harness (confirmations, operation journals, the mutation scope) is
+    engine-neutral; only the declaration pass and the capability binding are v1.
 - Declaration literals may be bounded structured JSON, using the one shared
   depth/node/byte/array limit contract in `src/harness/safety-limits.ts`. The same
   contract governs declaration decoding, persistence, raw authority matching,
@@ -481,7 +521,11 @@ bug was found against the REAL API, not by reading the code.
   Typed pre-dispatch budget/cancellation failures are definitive and are never
   classified as ambiguous. Transport failure/timeout/408/5xx/malformed
   success after dispatch remains `outcome_unknown` without automatic retry.
-- **Admin-authored intent capability:** before any main-planner turn can receive
+- **Admin-authored intent capability (V1 ONLY — see "Product contract" for the v2
+  equivalent):** this whole mechanism runs on the v1 planner path and nowhere
+  else. V2 writes carry no `IntentCapabilityV1`; their authority is the
+  previewed, hash-bound operation the admin confirms with the button. Under v1,
+  before any main-planner turn can receive
   Clockify results, the constrained declaration pass receives only the exact
   current and unresolved prior admin-authored text as untrusted natural-language
   input; its trusted envelope also supplies exact write-action names,

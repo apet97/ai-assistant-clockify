@@ -1084,6 +1084,101 @@ avoid re-deriving a decision. For what is true right now, read `CLAUDE.md`.
   (`run-event-hydration.ts` still hardcodes `facts: []`/`references: []` and uses the raw action
   name as `title`). This docs commit lands AFTER the deployed candidate, so local HEAD is one
   docs-only commit ahead of what production serves — the same benign state as `b62cf42` was.
+- **2026-08-01 — backfill: Phases A, B, M and C, plus four statements this log carried past
+  their date.** Both chronologies stop before three completed phases. Per this file's own
+  contract nothing above is edited; the superseded statements are named and date-scoped here.
+  **Correction 1 — `PRESENTED_RESULT_STATUSES` is SEVEN, not six.** The four "six statuses"
+  statements — in the `T15-A through T15-D CLOSED` and `T15-E CLOSED / Task 15 green` entries,
+  once per chronology, one of them wrapped as "all six" / "`PresentedResult` statuses" — were
+  exact when written and are date-scoped to before `c0fa26b`. Phase A added the seventh,
+  `no_change_needed` (readiness plan A5 / defect
+  D-3, `src/assistant-v2/presentation/presented-result.ts`), pinned by `toHaveLength(7)` in
+  `tests/unit/presented-result-snapshots.test.ts`.
+  **Correction 2 — production no longer serves `34b9d05905cbd71c9cfb72236e1f824129ed5f63`.**
+  That sha in the 2026-07-28 entry, and the AGENTS.md-section tail's deploy candidate ("the D3
+  commit", superseding D1's `a369e06`), are both superseded by the 2026-07-30 cutover, which
+  deployed `ad06c083d3e1fc6194dd2fa7b1c6710cc190736e` — recorded in `docs/V2_CUTOVER_RECORD.md`
+  and now pinned against the prose by `tests/unit/deployed-candidate-contract.test.ts`, which
+  extracts the sha from that record rather than hard-coding it, so the next deploy cannot flip
+  one side silently.
+  **Correction 3 — every `Default engine: v1` suffix above is date-scoped to before `6bd059c`
+  (C11).** An unspecified `ASSISTANT_ENGINE` now defaults to `v2`.
+  **Correction 4 — the `ad06c08` 239/1,143 discovery run is void for model selection** (M7,
+  below); statements that treat it as a model result are diagnostic history only.
+  **PHASE A (`a9ea7e1`…`6c3ff0c`, 2026-07-30) — readiness A1-A5, defects D-1..D-3.** `a9ea7e1`
+  is the failing test first: two turns in one session through the real v2 production
+  composition, where turn 2 called a write with ZERO discovery calls and still reached
+  preparation. `f8cce8a` (A2) filters `seedCacheFromPriorRun` to READ operations using
+  `apiOperation.access === "read"` — the exact classifier `partitionToolCalls` uses, so the seed
+  filter and the partitioner cannot disagree about what a write is; reads stay cached, every
+  write is rediscovered against the current turn's own words. `f2a7e8e` (A3) bounds which run
+  may seed at all: `phase = 'completed'` AND a new `RUN_SEED_RECENCY_WINDOW_MS` of 30 minutes,
+  so a failed, abandoned or arbitrarily old run cannot seed. `55a297d` (A4) replaces the prompt
+  line that licensed skipping discovery ("discover operations you do not already have loaded")
+  with one that expects discovery whenever the turn requests a change. `c0fa26b` (A5 / D-3) adds
+  the seventh terminal status; the catalog hash did NOT move
+  (`fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`, model registry
+  `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`). `6c3ff0c` (D-2) labels
+  the curated-intent 12/12 adoption claim a **v1** result and states that all 44 v1-only actions
+  (24 `composite`, 16 `generic`, 4 `local`) are invisible to the v2 model by design, with
+  `clockify_entries_create` as the bounded v2 replacement for `clockify_log_work`; the
+  exclusions are pinned by name in `tests/unit/model-api-catalog.test.ts`.
+  **PHASE B (`47516cb`…`e4c43c2`, 2026-07-30) — the v2 evidence scaffolding.** `47516cb` lets an
+  eval scenario actually constrain the host-call budget. `da86639` derives write-safety evidence
+  from real observations (`tests/helpers/v2-write-safety-observer.ts`) — note the observer lives
+  in the integration test, which is why the v2 lane stayed structurally blocked. `7fc7ef4`
+  implements `scripts/lib/live-v2-chain.ts` + `live-v2-contract.ts`: the guarded v2 preview →
+  stored nonce → confirm → real Clockify write → cleanup chain, with a credential-free
+  `--dry-run` contract path. `e3002fd` gives each of the three v2 evals a deterministic evidence
+  path. `7da4e37` adds `scripts/evidence/v2-release-evidence.ts`. `99adb3e` adds the v2
+  authority, deployed-engine, model, private-production and live-browser builders BESIDE the
+  immutable v1 originals — siblings, not replacements. `14266ac` makes the release test-count
+  floor discriminate again. `e4c43c2` adds `.github/workflows/v2-model-evals.yml`, which records
+  the three v2 reports.
+  **PHASE M (M1-M7, `f98954a`…`0b2b723`, 2026-07-30/31) — the evaluator contract.** M1
+  `f98954a` scores a prepared write as used. M2 `094571a` journals every logically admitted
+  write call as `tool.requested` before the unchanged preparation boundary, not only its
+  denials. M3 `a69c72d` judges destructive selection on MODEL CALLS, not on the loaded set;
+  loaded-but-never-called destructive operations became non-gating telemetry while a denied
+  unrelated destructive CALL stays zero-tolerance. M4 `1f61faa` limits the corpus to the 120
+  operations loadable under the add-on auth class, excluding exactly seven
+  (`clockify_custom_fields_create` and the six `clockify_webhooks_*`), moving the grid from
+  1,143 to **1,080** turns. M5 `669d1ee` makes the corpus argument-bearing
+  (`v2-discovery-argument-bearing-v1`). M6 `5500432` enforces the owner-ratified thresholds
+  verbatim — 3/3 canonical, at least 2/3 paraphrase, at least 2/3 typo per case, with an
+  unrelated destructive call or more than 12 loaded API tools failing the report. M7 `0b2b723`
+  binds the historical diagnostic byte-for-byte (`evidence/eval/`, 182,840 bytes, sha256
+  `15798b8720c4ab1cece182618415088e98210420ae56f57a23772dd49fd129e9`) behind a provenance
+  sidecar marked `diagnostic_void_as_model_evidence`, WITHOUT promoting it. `0b2b723` is the
+  immutable Phase M source boundary.
+  **PHASE C (C0-C12, `a024378`…`353a6f0`, 2026-07-31) — dead weight out, v2 off v1's control
+  plane.** `0e1880a` first aligned agent guidance with the v2 source checkpoint. C0 `a024378`
+  and C1 `bb6eaeb` are docs tasks whose premises were ALREADY TRUE at HEAD, recorded as such
+  rather than shown as no-ops. C2 `1a81f94` routes every runner iteration's tool set through
+  the guarded `toolsForV2LoadedSet`. C3 `ed6cd28` deletes `recoverOrphanedActiveRuns` outright
+  rather than leaving it declared-but-unwired. C4 `5715a0d` collapses undo to the durable path
+  production always used, `reverseCreationDurably`. C5 `d7535fe` removes the dead reference
+  plumbing and records the **OWNER DECISION 2026-07-31: KEEP DORMANT** at the seam — the
+  entity-reference vertical is not funded for this release, and storage plus `referenceSelector`
+  metadata stay compatible so funding it later needs no migration. C6 `c4b2590` retires
+  `src/harness/compose.ts` after an adversarial reachability answer a second reader could not
+  refute. C7 `48ea9cb` adds a real orphan-module gate (`madge --orphans` alone always exits 0).
+  C8 `d2781c6` stops charging `**/*.generated.ts` against the duplication budget by ignore, NOT
+  by moving the file — no artifact regenerated, no hash moved, the catalog freeze rule unspent.
+  C9 `63c7b64` removes exports nothing calls. C10 `d68aa87` is the lever: new engine-neutral
+  `src/routes/control-plane.ts` moved verbatim by exact line range, after which
+  `src/routes/v2-chat-pipeline.ts` no longer mentions `chat-pipeline` at all, so v1 is off the
+  v2 request path and becomes retirable. C11 `6bd059c` is the **OWNER DECISION 2026-07-31**
+  default-engine flip; it changes only what an UNSPECIFIED configuration does, since production
+  sets `ASSISTANT_ENGINE=v2` explicitly. C12 `353a6f0` writes `docs/V1_RETIREMENT_SEQUENCE.md`
+  with its hard entry gate.
+  **PHASE D IS DELIBERATELY NOT LOGGED HERE — it is in progress.** D1-D6 and D9-D14 have landed
+  (`257a242`…`764ee91`); D7, D8 and D15 have not closed, and this entry itself is part of D15.
+  Writing Phase D entries now would claim a closure that has not happened. They belong in the
+  entry that closes the phase.
+  Counts unchanged by this entry (documentation only): `ACTION_CATALOG` 171 · api 127 ·
+  composite 24 · generic 16 · local 4. Live: `not_run`. Default engine: `v2`. Next: Phase D
+  tail, then the candidate-bound release run.
 
 
 ---
@@ -1505,4 +1600,55 @@ avoid re-deriving a decision. For what is true right now, read `CLAUDE.md`.
   v1 is schema **8** with **4 active installations**. `token_backed_read` on the 21 July backup was
   **200, not 401** — but D5's reinstall retires the v1 token, so every pre-reinstall backup fails it
   afterwards: Phase F requires a **post-reinstall** backup.
+- **2026-08-01 — backfill: Phases A, B, M and C, plus four date-scoped corrections.** This
+  chronology ended at a PRE-deploy constraints entry; the parallel `## From CLAUDE.md` tail
+  carries the same backfill in full. Nothing above is edited.
+  **Correction 1 — `PRESENTED_RESULT_STATUSES` is SEVEN, not six.** The "six statuses" claims
+  in the `T15-A..D CLOSED` and `T15-E CLOSED / Task 15 green` entries (both chronologies) are
+  date-scoped to before `c0fa26b`, which added `no_change_needed` (readiness A5 / defect D-3);
+  `tests/unit/presented-result-snapshots.test.ts` pins `toHaveLength(7)`.
+  **Correction 2 — the deploy candidate above is superseded.** "The D3 commit", superseding
+  D1's `a369e06`, and the CLAUDE.md-section tail's `34b9d05905cbd71c9cfb72236e1f824129ed5f63`
+  are both superseded by the 2026-07-30 cutover of
+  `ad06c083d3e1fc6194dd2fa7b1c6710cc190736e` (`docs/V2_CUTOVER_RECORD.md`), now pinned to the
+  prose by `tests/unit/deployed-candidate-contract.test.ts`.
+  **Correction 3 — every `Default engine: v1` suffix above is date-scoped to before `6bd059c`
+  (C11); an unspecified `ASSISTANT_ENGINE` now defaults to `v2`.** **Correction 4 — the
+  `ad06c08` 239/1,143 discovery run is void for model selection** (M7).
+  **PHASE A** (`a9ea7e1`…`6c3ff0c`, 2026-07-30, readiness A1-A5 / defects D-1..D-3): failing
+  test first for a stale cross-turn write seed; cross-turn seeding filtered to READ operations
+  by `apiOperation.access === "read"`; only a `completed` run inside a 30-minute
+  `RUN_SEED_RECENCY_WINDOW_MS` may seed; the prompt now requires discovery whenever a turn
+  requests a change; the seventh terminal status `no_change_needed` added with the catalog hash
+  unmoved; and the curated-intent adoption claim relabelled a **v1** result, with all 44 v1-only
+  actions invisible to v2 by design and `clockify_entries_create` as the bounded replacement for
+  `clockify_log_work`.
+  **PHASE B** (`47516cb`…`e4c43c2`, 2026-07-30): eval host-call budget made constrainable;
+  write-safety evidence derived from a real observer (which lives in the integration test —
+  the reason the v2 lane stayed structurally blocked); `scripts/lib/live-v2-chain.ts` +
+  `live-v2-contract.ts` implementing the guarded live v2 preview → nonce → confirm → real write
+  → cleanup chain with a credential-free `--dry-run`; deterministic evidence paths for the three
+  v2 evals; `v2-release-evidence.ts`; the v2 authority/deployed-engine/model/private-production/
+  live-browser builders beside the immutable v1 originals; a discriminating release test-count
+  floor; and `.github/workflows/v2-model-evals.yml`.
+  **PHASE M** (M1-M7, `f98954a`…`0b2b723`): score a prepared write as used; journal admitted
+  `tool.requested` calls, not only denials; judge destructive selection on model CALLS rather
+  than the loaded set; limit the corpus to the **120** add-on-loadable operations (seven
+  excluded: `clockify_custom_fields_create` + six `clockify_webhooks_*`), moving the grid from
+  1,143 to **1,080** attempts; make the corpus argument-bearing; enforce the owner-ratified
+  floors (3/3 canonical, ≥2/3 paraphrase, ≥2/3 typo; unrelated destructive call and >12 loaded
+  API tools zero-tolerance); and bind the historical `ad06c08` diagnostic byte-for-byte as
+  `diagnostic_void_as_model_evidence` without promoting it. `0b2b723` is the immutable boundary.
+  **PHASE C** (C0-C12, `a024378`…`353a6f0`, 2026-07-31): two docs premises found ALREADY TRUE
+  and recorded as such; the guarded tool builder wired; `recoverOrphanedActiveRuns` deleted;
+  one durable undo path; the dead reference plumbing removed under **OWNER DECISION: KEEP
+  DORMANT**; `src/harness/compose.ts` retired as unreachable; a real orphan-module gate added to
+  `verify`; generated evidence removed from the duplication budget by ignore, not by moving the
+  file; unused exports removed; the engine-neutral `src/routes/control-plane.ts` extracted so v2
+  stops instantiating v1's pipeline; the **OWNER DECISION** default-engine flip to `v2`; and
+  `docs/V1_RETIREMENT_SEQUENCE.md`.
+  **PHASE D IS NOT LOGGED — it is in progress.** D1-D6 and D9-D14 landed (`257a242`…`764ee91`);
+  D7, D8 and D15 have not closed, and this entry is itself part of D15. Its entries belong to
+  the commit that closes the phase, not to this one.
+  Live: `not_run`. Default engine: `v2`. Next: Phase D tail.
 
