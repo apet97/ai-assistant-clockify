@@ -13,7 +13,8 @@ engineering evidence record is green.
 - [`../../DEPLOYMENT.md`](../../DEPLOYMENT.md) - deployment, backup, restore, and operational constraints
 - [`../ENDPOINT_SCOPE_CONTRACT.md`](../ENDPOINT_SCOPE_CONTRACT.md) - generated scope-to-endpoint contract
 - [`evidence/release-candidate.md`](./evidence/release-candidate.md) - exact-run engineering evidence
-- [`03-operations-evidence-rollback-package.md`](./03-operations-evidence-rollback-package.md) - incident and recovery procedure
+- [`03-operations-v2-runbook.md`](./03-operations-v2-runbook.md) - v2 release, deploy, backup-drill, and signed v1-return procedure for the engine production serves
+- [`03-operations-evidence-rollback-package.md`](./03-operations-evidence-rollback-package.md) - retired v1 release history, and the only copy of the engine-neutral incident and recovery procedures
 
 ## Review procedure
 

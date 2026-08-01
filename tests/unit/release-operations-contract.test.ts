@@ -537,6 +537,169 @@ describe("v1 rollback runbook scope", () => {
 });
 
 /**
+ * D9. A SIBLING of the two-file loops at the top of this file, deliberately not a
+ * third entry in them. Those loops assert v1-by-design facts — the `"v1"` engine
+ * equality at the cutover guard, the exact v1 backup command, the 1.0.0
+ * key-rotation drill — which a v2 runbook must FAIL. Adding this page to them
+ * would force the v2 fork to impersonate v1, which is the drift the fork exists
+ * to end.
+ */
+describe("v2 operations runbook scope", () => {
+  const V2_RUNBOOK = "docs/marketplace/03-operations-v2-runbook.md";
+  const V1_RUNBOOK = "docs/marketplace/03-operations-evidence-rollback-package.md";
+
+  it("exists at the exact path the v1 banner and the soak spec redirect to", () => {
+    // D1 could not assert this: the file did not exist, so the v1 banner pointed
+    // at a path nothing checked and `docs/V2_SOAK_SPEC.md` called its absence a
+    // blocking prerequisite. A typo'd filename would leave both documents naming
+    // a page no operator can open.
+    expect(existsSync(resolve(V2_RUNBOOK))).toBe(true);
+    expect(read(V1_RUNBOOK), "the v1 banner redirects here").toContain(V2_RUNBOOK);
+    expect(read("docs/V2_SOAK_SPEC.md"), "the soak spec points here").toContain(V2_RUNBOOK);
+  });
+
+  it("keeps the v2 database path in every executable step", () => {
+    // Mirror of the v1 page's pin, in the other direction. One database path per
+    // document: this page EXECUTES the v2 path and the v1 page executes the v1
+    // one. Anchored on the argument and assignment forms rather than the bare
+    // path, because the prose here legitimately NAMES the retired v1 database
+    // when it explains why the v1 export block cannot execute.
+    const runbook = read(V2_RUNBOOK);
+    expect(runbook).toMatch(/-- \/data\/ai-assistant-v2\.sqlite/u);
+    expect(runbook).toContain('export SELECTED_DATABASE_PATH="/data/ai-assistant-v2.sqlite"');
+    // Still DERIVED, never a literal: `gate:predeploy-backup` compares the
+    // backup's own recorded `metadata.source` against exactly this value, and
+    // the real cutover decoupled the two paths, so a future editor has a live
+    // precedent for hardcoding it.
+    expect(runbook).toContain('export PREDEPLOY_SOURCE_DATABASE_PATH="$SELECTED_DATABASE_PATH"');
+    expect(runbook).not.toMatch(/PREDEPLOY_SOURCE_DATABASE_PATH="\/data\//u);
+    // The v1 path may be NAMED in prose; it must never be EXECUTED here.
+    expect(runbook).not.toMatch(/-- \/data\/ai-assistant\.sqlite/u);
+    expect(runbook).not.toContain('SELECTED_DATABASE_PATH="/data/ai-assistant.sqlite"');
+  });
+
+  it("states the engine-default asymmetry against both of its real anchors", () => {
+    const runbook = read(V2_RUNBOOK);
+    // The runtime default is v2...
+    expect(read("src/config.ts")).toContain('ASSISTANT_ENGINE: z.enum(["v1", "v2"]).default("v2")');
+    expect(runbook).toContain('ASSISTANT_ENGINE: z.enum(["v1", "v2"]).default("v2")');
+    // ...while the deploy transaction's EXPECTATION defaults the other way, so an
+    // operator who exports nothing asserts v1 against a process running v2.
+    expect(read("DEPLOYMENT.md")).toContain('EXPECTED_ASSISTANT_ENGINE="${SELECTED_ASSISTANT_ENGINE:-v1}"');
+    expect(runbook).toContain('EXPECTED_ASSISTANT_ENGINE="${SELECTED_ASSISTANT_ENGINE:-v1}"');
+    // The reconciliation is an explicit export plus a check, before the deploy.
+    expect(runbook).toContain("export SELECTED_ASSISTANT_ENGINE=v2");
+    expect(runbook).toContain('test "$EXPECTED_ASSISTANT_ENGINE" = "v2"');
+    const exported = runbook.indexOf("export SELECTED_ASSISTANT_ENGINE=v2");
+    const deploy = runbook.indexOf("npm run --silent deploy:private-production");
+    expect(exported, "engine exported").toBeGreaterThanOrEqual(0);
+    expect(deploy, "engine exported before the deploy").toBeGreaterThan(exported);
+    // ...and the script really does require it, so the refusal described is real.
+    expect(read("scripts/deploy-private-production.ts"))
+      .toContain('required(environment, "SELECTED_ASSISTANT_ENGINE")');
+  });
+
+  it("carries the F24/ADR-001 fresh-cutover rule that no marketplace page had", () => {
+    const runbook = read(V2_RUNBOOK);
+    expect(runbook).toContain("F24 (ADR 001)");
+    expect(runbook).toContain('export SELECTED_ADR001_DECISION="superseded_in_place_migration"');
+    expect(runbook).toContain("src/db/fresh-boundary.ts");
+    expect(runbook).toContain("new_unused");
+    // The rule is enforced in code, not merely described; pin the enforcement so
+    // the paragraph cannot outlive it.
+    const deployScript = read("scripts/deploy-private-production.ts");
+    expect(deployScript).toContain(
+      'environment.SELECTED_ADR001_DECISION !== "superseded_in_place_migration"',
+    );
+    expect(deployScript).toContain(
+      "An ADR-fresh v2 transition requires SELECTED_DATABASE_PATH_DISPOSITION=new_unused. ",
+    );
+    expect(existsSync(resolve("src/db/fresh-boundary.ts"))).toBe(true);
+  });
+
+  it("derives the expected product version from the staged candidate", () => {
+    // D12 added `EXPECTED_PRODUCT_VERSION` as a required export. A page that
+    // mentions it without ASSIGNING it still fails a literal read-through, and a
+    // literal semver would be wrong for one of the two supported engines.
+    const runbook = read(V2_RUNBOOK);
+    expect(runbook).toMatch(/(^|\n)EXPECTED_PRODUCT_VERSION="/u);
+    expect(runbook).toContain("export EXPECTED_PRODUCT_VERSION");
+    expect(runbook).toContain('"$RELEASE_STAGING/package.json"');
+    expect(runbook).toContain("value.version !== process.env.EXPECTED_PRODUCT_VERSION");
+    expect(runbook.indexOf("export EXPECTED_PRODUCT_VERSION"))
+      .toBeLessThan(runbook.indexOf("value.version !== process.env.EXPECTED_PRODUCT_VERSION"));
+  });
+
+  it("documents the real v1 return instead of the export block that cannot execute", () => {
+    const runbook = read(V2_RUNBOOK);
+    expect(runbook).toContain("## Application rollback: the signed full v1 return");
+    expect(runbook).toContain("planSignedFullV1Rollback");
+    expect(runbook).toContain("clearStaleInstallationSql");
+    expect(runbook).toContain("clearsStaleInstallation: true");
+    // Both refusals the v1 export block hits from current production.
+    expect(runbook).toContain("existing_expected");
+    expect(runbook).toContain("docs/adr/003-cross-database-authority.md");
+    // Every name the runbook sends an operator to must still exist.
+    const cutover = read("scripts/cutover-transaction.ts");
+    expect(cutover).toContain("export function planSignedFullV1Rollback(");
+    expect(cutover).toContain("export function clearStaleInstallationSql(");
+    expect(cutover).toContain("clearsStaleInstallation: true");
+    expect(existsSync(resolve("docs/adr/003-cross-database-authority.md"))).toBe(true);
+    // ...and it may not promise more than ADR 003 allows.
+    expect(runbook).toContain("may not claim cross-database replay protection");
+  });
+
+  it("references the engine-neutral incident sections instead of forking them", () => {
+    // The D9 decision on the eight engine-neutral procedures: REFERENCE, do not
+    // move. D1 already made the v1 page their home and pinned them there as real
+    // `## ` sections, and its banner already says to substitute the live database
+    // path. A second copy here could silently disagree with that one.
+    const runbook = read(V2_RUNBOOK);
+    const v1 = read(V1_RUNBOOK);
+    for (const section of [
+      "Outcome vocabulary",
+      "Pause and triage",
+      "Database restore and disaster recovery",
+      "Provider outage",
+      "Clockify throttle or host outage",
+      "Uninstall or installation revocation",
+      "Required incident record",
+      "Re-enable criteria",
+    ]) {
+      // Named here, so no procedure becomes unreachable from the v2 runbook...
+      expect(runbook, `${section} must be named here`).toContain(section);
+      // ...still a real section there...
+      expect(v1, `${section} must stay a real section on the v1 page`).toContain(`\n## ${section}\n`);
+      // ...and NOT re-forked here.
+      expect(runbook, `${section} must not be forked here`).not.toContain(`\n## ${section}\n`);
+    }
+    expect(runbook, "the v2 runbook links the v1 page").toContain("./03-operations-evidence-rollback-package.md");
+    // "Application rollback" is the v1 banner's stated exception, so this page
+    // owns its own and the v1 one is NOT referenced as applicable.
+    expect(v1).toContain("\n## Application rollback\n");
+    expect(runbook).toContain('**This page**, "Application rollback: the signed full v1 return"');
+  });
+
+  it("qualifies both references that used to name only the v1 page", () => {
+    for (const [path, v2Link] of [
+      ["MARKETPLACE_READINESS.md", "./docs/marketplace/03-operations-v2-runbook.md"],
+      ["docs/marketplace/02-reviewer-package.md", "./03-operations-v2-runbook.md"],
+    ] as const) {
+      const doc = read(path);
+      expect(doc, `${path} links the v2 runbook`).toContain(v2Link);
+      // The v1 link survives, on exactly one line, and that line says which
+      // engine it is for. An unqualified "incident and recovery procedure" is
+      // how a reader ends up following the retired release order against the
+      // live database.
+      const v1Basename = "03-operations-evidence-rollback-package.md";
+      const lines = doc.split("\n").filter((line) => line.includes("](./") && line.includes(v1Basename));
+      expect(lines, `${path} links the v1 page exactly once`).toHaveLength(1);
+      expect(lines[0]!, `${path} qualifies the v1 link`).toMatch(/\bv1\b/u);
+    }
+  });
+});
+
+/**
  * D6: four documents REQUIRED a production soak and none DEFINED one, so "soak"
  * was an unfalsifiable gate — anyone could declare it passed. `docs/V2_SOAK_SPEC.md`
  * defines it. These assertions exist so the definition cannot rot away from the
@@ -885,9 +1048,19 @@ describe("v2 soak specification", () => {
     expect(cutover).toContain("clearsStaleInstallation: true");
     expect(normalized).toContain("**`planSignedFullV1Rollback`**");
     expect(normalized).toContain("`clearsStaleInstallation`");
-    // The blocking prerequisite must be stated, and must still BE blocking.
-    expect(existsSync(resolve("docs/marketplace/03-operations-v2-runbook.md"))).toBe(false);
-    expect(normalized).toContain("**D9 must land before the soak clock starts**");
+    // The blocking prerequisite must be stated, and must still BE blocking. D9
+    // landed, so the file now exists — but flipping this assertion to `true`
+    // alone would trade a real gate for a green test. The spec must still name
+    // the exact runbook AND the exact section that walks the plan, and that
+    // section must be there.
+    const v2RunbookPath = "docs/marketplace/03-operations-v2-runbook.md";
+    expect(existsSync(resolve(v2RunbookPath))).toBe(true);
+    expect(normalized).toContain(v2RunbookPath);
+    expect(normalized).toContain('**"Application rollback: the signed full v1 return"**');
+    const v2Runbook = read(v2RunbookPath);
+    expect(v2Runbook).toContain("## Application rollback: the signed full v1 return");
+    expect(v2Runbook).toContain("planSignedFullV1Rollback");
+    expect(v2Runbook).toContain("clearStaleInstallationSql");
 
     // Entry-gate item 3 must not claim the deploy transaction's own UNDO proves
     // v1 reachability. Those two names are pinned to the SERVING tree, which
@@ -895,7 +1068,12 @@ describe("v2 soak specification", () => {
     const gate = slice("## 2. Entry gate", "## 3. Duration").replace(/\s+/gu, " ");
     expect(gate).toContain("This is NOT the `ROLLBACK_RELEASE_SHA`");
     expect(gate).toContain("can never name v1");
-    expect(gate).toContain("this item cannot be satisfied and the soak may not start");
+    // The gate item now names the document that satisfies it, and keeps a
+    // condition that a bare `existsSync` cannot satisfy: the plan inputs must be
+    // suppliable, because `planSignedFullV1Rollback` throws on the gap.
+    expect(gate).toContain(v2RunbookPath);
+    expect(gate).toContain("Application rollback: the signed full v1 return");
+    expect(gate).toContain("does not satisfy this item");
     expect(DEPLOY).toContain('test "$ROLLBACK_RELEASE_SHA" = "$SERVING_RELEASE_SHA"');
   });
 

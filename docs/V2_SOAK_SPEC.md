@@ -46,16 +46,23 @@ fact, not a judgement.
 2. **The deployment came through the checked transaction.** `npm run
    deploy:private-production` inside `DEPLOYMENT.md`'s "Release-candidate checked
    transaction", never a bare `railway up` from a working tree.
-3. **A written, executable v1 rollback procedure exists — BLOCKING, and not satisfied at
-   this commit.** This is NOT the `ROLLBACK_RELEASE_SHA` / `ROLLBACK_SOURCE_DIR` pair in
+3. **A written, executable v1 rollback procedure exists — BLOCKING.** This is NOT the
+   `ROLLBACK_RELEASE_SHA` / `ROLLBACK_SOURCE_DIR` pair in
    `DEPLOYMENT.md`'s deploy transaction. Those are that transaction's own UNDO and are
    pinned by `test "$ROLLBACK_RELEASE_SHA" = "$SERVING_RELEASE_SHA"`, so during a v2 soak
    they necessarily name the **v2** tree and can never name v1; ticking them establishes
-   nothing about v1 reachability. What must exist is the D9 v2 runbook walking
+   nothing about v1 reachability. What must exist is a written procedure walking
    `planSignedFullV1Rollback` (`scripts/cutover-transaction.ts`) plus ADR 003's
    stale-installation-row clearance, naming the recorded v1 variable set, v1 source, v1
    artifact hash, and v1 database path. See §4 for why the obvious substitute does not
-   execute. **Until D9 lands this item cannot be satisfied and the soak may not start.**
+   execute. **That procedure now exists:**
+   [`docs/marketplace/03-operations-v2-runbook.md`](./marketplace/03-operations-v2-runbook.md),
+   section **"Application rollback: the signed full v1 return"**. The item is ticked by
+   reading that section and confirming its plan inputs — recorded owner signature, v1
+   source tree, v1 release artifact hash, and the complete recorded v1 variable set — can
+   actually be supplied. A section that exists with no recorded v1 variable set behind it
+   does not satisfy this item, because `planSignedFullV1Rollback` throws on the gap rather
+   than producing a plan.
 4. **The ten alerts are configured and proven to reach a human.** Every match string in
    §5's table is configured as a log-match alert, and at least one of them has been
    observed firing end to end (the `cause=draining` line the deploy itself produces
@@ -163,12 +170,16 @@ plus ADR 003's `clearsStaleInstallation` step, since a restored v1 database stil
 the pre-outage installation row. It is **owner-planned work against a plan object**, not
 a read-through of any page.
 
-**BLOCKING PREREQUISITE.** No document currently walks an operator through that plan.
-`docs/marketplace/03-operations-v2-runbook.md`, which the v1 banner redirects to, **does
-not exist at this commit** (it is task D9). A 24-hour deadline against an unwritten
-procedure is not a commitment, it is a wish. **D9 must land before the soak clock
-starts** — which is why §2 carries it as entry-gate item 3 rather than as a footnote
-here.
+**The procedure this deadline commits to.**
+[`docs/marketplace/03-operations-v2-runbook.md`](./marketplace/03-operations-v2-runbook.md),
+which the v1 banner redirects to, exists and walks that plan in **"Application rollback: the
+signed full v1 return"**: the plan's five required inputs and the exact refusal each missing
+one produces, `clearStaleInstallationSql` before the reinstall, the two ADR 003 limits the
+runbook may not overstate, and an ordered return sequence ending at a `/version` that
+reports v1. A deadline against an unwritten procedure would be a wish rather than a
+commitment, which is why §2 carries the existence of that section as **entry-gate item 3**
+rather than as a footnote here — and why the item is ticked by reading it, not by observing
+that a file is present.
 
 ---
 
