@@ -72,6 +72,9 @@ describe("every reachable denial code is a member", () => {
     ["unavailable_for_auth_class", "read-execution"],
     ["policy_denied", "read-execution"],
     ["unknown_action", "read-execution"],
+    ["read_failed", "read-execution"],
+    ["clarification_already_active", "read-execution"],
+    ["unexpected_action_result", "read-execution"],
     // services/operation-preparation-service.ts:470-478
     ["host_call_budget_exceeded", "operation-preparation"],
     ["clarification_required", "operation-preparation"],
@@ -175,22 +178,11 @@ describe("source-derived drift guard", () => {
    * the same failure the guard exists to prevent.
    */
   const ALLOWED_NON_MEMBERS = new Map<string, string>([
-    // Read-port internal outcomes. They reach `lastDenialCode` and therefore
-    // degrade to `internal_error` copy on an admin's screen. That is a real
-    // gap, recorded rather than fixed: adding members to `TerminalReason` is
-    // a product copy decision, out of scope for this contract repair.
-    ["clarification_already_active", "read-execution: degrades to internal_error (known gap)"],
-    ["unexpected_action_result", "read-execution: degrades to internal_error (known gap)"],
     // Preparation-internal codes. Since the write-preparation catch was
     // bounded to its allowlist, these can no longer escape as `outcome.code`
     // — they are folded into `write_port_not_ready`.
     ["missing_mutation_plan", "operation-preparation: internal, folded into write_port_not_ready"],
     ["preparation_failed", "operation-preparation: internal, folded into write_port_not_ready"],
-    // Same category as the two above, and reached more often since the read
-    // catch was bounded to it: it is the code every unrecognized read failure
-    // now carries, so it reaches `lastDenialCode` and degrades to
-    // `internal_error` copy. Recorded, not fixed — see the note above.
-    ["read_failed", "read-execution: degrades to internal_error (known gap)"],
     // Discovery notices, not denials: `discovery.search` returns these under
     // `kind: "notice"` and they never populate `outcome.code`.
     ["no_available_operation_for_auth_class", "api-search-tool: a notice kind, not a denial"],

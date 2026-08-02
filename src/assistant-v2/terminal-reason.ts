@@ -86,7 +86,10 @@ export type TerminalReason =
   | "read_dispatch_failed"
   | "invalid_request"
   | "cancelled_before_dispatch"
-  | "not_admitted";
+  | "not_admitted"
+  | "read_failed"
+  | "clarification_already_active"
+  | "unexpected_action_result";
 
 /** Every reason, for exhaustiveness tests. Keep in sync with the union above. */
 export const TERMINAL_REASONS: readonly TerminalReason[] = [
@@ -120,6 +123,9 @@ export const TERMINAL_REASONS: readonly TerminalReason[] = [
   "invalid_request",
   "cancelled_before_dispatch",
   "not_admitted",
+  "read_failed",
+  "clarification_already_active",
+  "unexpected_action_result",
 ] as const;
 
 /**
@@ -213,6 +219,12 @@ export function copyFor(reason: TerminalReason): string {
       return "I stopped partway through and did not start the remaining steps. Nothing was changed. Please try again.";
     case "read_dispatch_failed":
       return "I could not read from Clockify to finish that request. Nothing was changed. Please try again in a moment.";
+    case "read_failed":
+      return "A read from Clockify did not complete, so I stopped. Nothing was changed. Please try again in a moment.";
+    case "clarification_already_active":
+      return "I already have an open question waiting on your answer, so I stopped rather than ask a second one. Nothing was changed. Answer the question above and I will carry on.";
+    case "unexpected_action_result":
+      return "An operation returned something I could not interpret, so I stopped rather than act on it. Nothing was changed. Please try again.";
     default: {
       const exhaustive: never = reason;
       return exhaustive;
