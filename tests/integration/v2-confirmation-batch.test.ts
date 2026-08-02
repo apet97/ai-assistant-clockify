@@ -15,6 +15,7 @@ import { createPendingConfirmation, rotatePendingNonce } from "../../src/harness
 import { createFakeWorkspace, FAKE_MUTATION_METHOD_PATTERN } from "../helpers/fake-clockify.js";
 import { WRITE_PREVIEW_BASE_SEED, WRITE_PREVIEW_FIXTURES } from "../helpers/v2-write-preview-fixtures.js";
 import { createApp } from "../../src/server.js";
+import type { confirmationsRouter } from "../../src/routes/confirmations.js";
 import { makeTestConfig } from "../helpers/config.js";
 import { testKeys } from "../helpers/test-keys.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -551,5 +552,18 @@ describe("v2 confirmation batches", () => {
     expect(writeCallTotal(fake.counts)).toBe(writesBefore);
     expect(writesBefore).toBe(0);
     expect(store.getPendingConfirmation(confirmationId)?.status).toBe("pending");
+  });
+
+  // The guard above — and the cancel guard it mirrors — used to rest on an
+  // OPTIONAL port called through `?.`. Supplied at exactly one site
+  // (`api.ts:285`), so it was live; but a future router built without it would
+  // have silently disabled both, with no compile error and no failing test,
+  // restoring the false `incompatible_confirmation` message. This assertion is
+  // evaluated by the COMPILER: if `isBatchOwned` becomes optional again, the
+  // conditional type resolves to "optional" and this file stops building.
+  it("cannot be wired without the batch-ownership port", () => {
+    type Options = Parameters<typeof confirmationsRouter>[0];
+    const wiring: Omit<Options, "isBatchOwned"> extends Options ? "optional" : "required" = "required";
+    expect(wiring).toBe("required");
   });
 });

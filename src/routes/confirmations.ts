@@ -22,8 +22,17 @@ export function confirmationsRouter(options: {
   /** True when the stored record is a v2 preview (authorityModel discriminator). */
   isV2Preview: (record: PendingRecord) => boolean;
   /** True when the record belongs to a Confirm-all batch — per-item cancel is
-   * rejected with `batch_cancel_required` (closure-plan PR 4). */
-  isBatchOwned?: (record: PendingRecord) => boolean;
+   * rejected with `batch_cancel_required` (closure-plan PR 4), and per-item
+   * confirm with `batch_confirmation_required` (C12).
+   *
+   * REQUIRED, not optional. Both guards are pure wiring: an omitted port used
+   * to disable them silently, with no compile error and no failing test, and
+   * the C12 guard is exactly what makes `commitConfirmation` v1-only — a
+   * reachability fact that was true of one call site and enforced by nothing.
+   * A future router built without this port now fails to compile instead of
+   * quietly restoring the false `incompatible_confirmation` message this
+   * branch exists to remove. */
+  isBatchOwned: (record: PendingRecord) => boolean;
   getPendingConfirmation: (id: string) => PendingRecord | undefined;
   cancelConfirmation: (id: string) => boolean;
   sessionAsyncHandler: WrappedHandler;
@@ -60,7 +69,7 @@ export function confirmationsRouter(options: {
     //
     // Batches are v2-only (`chat-pipeline.ts` creates none), so this cannot
     // change a v1 outcome.
-    if (options.isBatchOwned?.(record)) {
+    if (options.isBatchOwned(record)) {
       return res.status(400).json({
         ok: false,
         code: "batch_confirmation_required",
@@ -179,7 +188,7 @@ export function confirmationsRouter(options: {
       res.status(403).json({ ok: false, code: "forbidden", message: "This preview belongs to a different session." });
       return;
     }
-    if (options.isBatchOwned?.(record)) {
+    if (options.isBatchOwned(record)) {
       res.status(400).json({
         ok: false,
         code: "batch_cancel_required",
