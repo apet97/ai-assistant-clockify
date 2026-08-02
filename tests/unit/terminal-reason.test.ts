@@ -186,7 +186,11 @@ describe("source-derived drift guard", () => {
     // — they are folded into `write_port_not_ready`.
     ["missing_mutation_plan", "operation-preparation: internal, folded into write_port_not_ready"],
     ["preparation_failed", "operation-preparation: internal, folded into write_port_not_ready"],
-    ["read_failed", "read-execution: the bounded fallback, parsed as internal_error by design"],
+    // Same category as the two above, and reached more often since the read
+    // catch was bounded to it: it is the code every unrecognized read failure
+    // now carries, so it reaches `lastDenialCode` and degrades to
+    // `internal_error` copy. Recorded, not fixed — see the note above.
+    ["read_failed", "read-execution: degrades to internal_error (known gap)"],
     // Discovery notices, not denials: `discovery.search` returns these under
     // `kind: "notice"` and they never populate `outcome.code`.
     ["no_available_operation_for_auth_class", "api-search-tool: a notice kind, not a denial"],
