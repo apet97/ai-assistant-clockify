@@ -29,6 +29,7 @@ import {
 } from "../harness/prepared-write-presentation.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import { errorReceipt } from "../harness/receipts.js";
+import { classifyLoggableError } from "../log-error-class.js";
 import { buildV2ActionContext } from "../assistant-v2/action-context.js";
 import { createClarificationRow } from "../assistant-v2/read-execution.js";
 
@@ -452,7 +453,31 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
             actionResultId: error.actionResultId,
           };
         }
-        const code = error instanceof Error ? error.message : "preparation_failed";        const ref = deps.store.recordActionResult({
+        // The SIXTH `error.message` site, and the one with the shortest path
+        // to an admin. The raw thrown string used to become BOTH the receipt
+        // `code` and the receipt `message`, and `result-view-service.ts`
+        // renders an `ok:false` receipt by putting `receipt.message` in the
+        // card summary and `receipt.code` in a card warning — so a raw SQL
+        // error, complete with table names and payload fragments, was shown
+        // verbatim. The allowlist below never guarded that: it chooses between
+        // two RETURN shapes, and the receipt was already built.
+        //
+        // The allowlist is now the boundary. A recognized denial keeps its own
+        // code (the `invalid_*` family included — those are generated field
+        // names, already part of this field's admitted contract); anything
+        // else becomes the one bounded code and a classified operator log.
+        const raw = error instanceof Error ? error.message : "preparation_failed";
+        const recognized = raw === "host_call_budget_exceeded"
+          || raw === "clarification_required"
+          || raw === "policy_denied"
+          || raw === "unavailable_for_auth_class"
+          || raw.startsWith("invalid_")
+          || raw === "presentation_limit_exceeded";
+        if (!recognized) {
+          console.error(`[v2-prepare] event=write_port_not_ready ${classifyLoggableError(error)}`);
+        }
+        const code = recognized ? raw : "write_port_not_ready";
+        const ref = deps.store.recordActionResult({
           workspaceId: scope.workspaceId,
           adminUserId: scope.adminUserId,
           sessionId: scope.sessionId,
@@ -467,14 +492,7 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
             }),
           },
         });
-        if (
-          code === "host_call_budget_exceeded" ||
-          code === "clarification_required" ||
-          code === "policy_denied" ||
-          code === "unavailable_for_auth_class" ||
-          code.startsWith("invalid_") ||
-          code === "presentation_limit_exceeded"
-        ) {
+        if (recognized) {
           return { kind: "denied", code, actionResultId: ref.id };
         }
         return { kind: "not_ready", code: "write_port_not_ready", actionResultId: ref.id };

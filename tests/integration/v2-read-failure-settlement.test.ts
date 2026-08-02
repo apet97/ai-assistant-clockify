@@ -75,6 +75,28 @@ describe("v2 read failure settlement (F03)", () => {
     expect(next.status).toBe(200);
   });
 
+  // The sweep hit at `read-execution.ts`. The receipt was always
+  // deterministic and `asTerminalReason` closes the admin-facing route field,
+  // so this was never on an admin's screen — but the raw thrown string still
+  // went into the durable event and the MODEL-visible observation, bounded in
+  // length and not in content. It is now bounded in content too, except for
+  // the reasons the closed contract already recognizes.
+  it("a throwing read journals a bounded code, not the transport message", async () => {
+    const c = await composeV2ProductionApp({ script: MIXED_BATCH_SCRIPT, seed: ONE_ENTRY });
+    (c.workspace.client as { listProjects: unknown }).listProjects = async () => {
+      throw new Error('ECONNRESET: socket hang up https://api.clockify.me/v1/workspaces/64ad1305c701cc5be7c26fe4');
+    };
+
+    await c.chat("list my entries and projects");
+
+    const events = await c.readEvents(c.latestRunId());
+    const denied = events.find((e) =>
+      e.event.eventType === "tool.denied" && e.event.payload.toolCallId === "tc-boom")!;
+    expect(denied.event.payload.code).toBe("read_failed");
+    expect(JSON.stringify(denied.event)).not.toContain("ECONNRESET");
+    expect(JSON.stringify(denied.event)).not.toContain("64ad1305c701cc5be7c26fe4");
+  });
+
   it("a stranded ACTIVE run is failed with its run.failed event at the next message", async () => {
     const c = await composeV2ProductionApp({ script: [{ text: "Fresh answer.", toolCalls: [] }] });
     // A prior request died mid-flight, leaving an active `model`-phase run.

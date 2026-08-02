@@ -15,6 +15,8 @@ import {
 } from "../db/store/pending-clarifications.js";
 import type { ReadExecutionOutcome, RunScope } from "./protocol.js";
 import { boundedDenialCode } from "./observations.js";
+import { asTerminalReason } from "./terminal-reason.js";
+import { classifyLoggableError } from "../log-error-class.js";
 import { buildV2ActionContext } from "./action-context.js";
 
 export interface ReadExecutionStore {
@@ -184,9 +186,36 @@ export async function executeV2Read(
       definition: action,
     });
   } catch (error) {
-    const code = boundedDenialCode(error instanceof Error && error.message.length > 0
-      ? error.message
-      : "read_failed");
+    // The sweep's other hit. Unlike the six admin-visible sites, this code
+    // never reaches an admin — the receipt below is deterministic and
+    // `asTerminalReason` closes the route field — but it DID write a raw
+    // thrown string into the model-visible observation and the durable event,
+    // bounded in length by `boundedDenialCode` and never in content.
+    //
+    // It is not flattened outright because real reasons genuinely arrive
+    // here: `requestGovernorFor` throws `installation_changed`
+    // (`v2-chat-pipeline.ts:49`), and that distinction is worth keeping.
+    // So: pass through anything the closed contract already recognizes, and
+    // give everything else the same treatment as the other sites — one
+    // bounded code plus a classified operator log, which this site alone was
+    // missing.
+    // A DECLARED `code` beats the prose message. `HostCallBudgetExceededError`
+    // and `HostRequestCancelledError` both carry one, and their `message` is an
+    // English sentence — passing that sentence through is how the budget
+    // failure used to arrive here as prose that `asTerminalReason` then
+    // collapsed to `internal_error` at the route.
+    const declared = error instanceof Error && "code" in error && typeof error.code === "string"
+      ? error.code
+      : undefined;
+    const thrown = declared ?? (error instanceof Error && error.message.length > 0 ? error.message : "read_failed");
+    // `asTerminalReason(x) === x` is the recognizer with no cast: it is the
+    // exact predicate the route applies. `invalid_*` is admitted alongside it
+    // because that family maps to its own constant there, not to a fallback.
+    const recognized = asTerminalReason(thrown) === thrown || thrown.startsWith("invalid_");
+    if (!recognized) {
+      console.error(`[v2-run] event=read_failed ${classifyLoggableError(error)}`);
+    }
+    const code = boundedDenialCode(recognized ? thrown : "read_failed");
     const failure: ActionResult = {
       kind: "receipt",
       receipt: errorReceipt({
