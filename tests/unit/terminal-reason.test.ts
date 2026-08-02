@@ -52,14 +52,16 @@ describe("terminal reason copy", () => {
 });
 
 /**
- * The drift guard.
+ * The known-codes half of the drift guard.
  *
  * `receipt.code` is `string` and the denial producers are not closed by types, so
  * "the union is complete" cannot be a compile-time fact. This pins the codes those
- * producers can actually REACH `outcome.code` with, each read from its source. A new
- * one added upstream fails HERE — loudly — rather than silently degrading to
- * `internal_error` on an admin's screen, which is the failure mode that would
- * otherwise be invisible.
+ * producers are known to reach `outcome.code` with today, each read from its
+ * source, so a change to one of THEM is caught.
+ *
+ * It cannot, on its own, detect a NEW code added upstream — nothing here reads
+ * source. The header comment used to claim it could; that claim was false, and
+ * the extraction guard below is the mechanism it promised.
  */
 describe("every reachable denial code is a member", () => {
   it.each([
@@ -132,5 +134,129 @@ describe("terminal reason parsing is closed", () => {
   it("gives a parsed unknown the same copy as a real internal error", () => {
     const parsed: TerminalReason = asTerminalReason("something nobody enumerated");
     expect(copyFor(parsed)).toBe(copyFor("internal_error"));
+  });
+});
+
+/**
+ * The drift guard the header comment used to promise.
+ *
+ * The list above is hand-written, so it can only catch a change to a code
+ * someone already thought of. This one derives the producer set from SOURCE:
+ * it reads the six files that put a literal denial code on this field and
+ * fails when one of them grows a code the admin-facing union cannot express.
+ *
+ * WHAT IT CANNOT SEE, stated plainly so this comment does not repeat the
+ * overclaim it replaces:
+ *   - a code built from a variable or a template literal,
+ *   - a code arriving through a pass-through (`code: preparation.code`),
+ *   - a code produced outside these six files and forwarded in.
+ * It catches LITERAL drift only. That is strictly more than the zero the
+ * previous mechanism caught, and it is not everything.
+ *
+ * The producers are the five named in `terminal-reason.ts` plus
+ * `discovery/api-search-tool.ts`, which owns `LoadedToolValidationFailure` —
+ * every member of that union becomes a denial code through `denyCode`, and
+ * leaving it out would rebuild the same blind spot one file over.
+ */
+describe("source-derived drift guard", () => {
+  const ROOT = new URL("../../src/", import.meta.url);
+  const PRODUCERS = [
+    "services/api-discovery-service.ts",
+    "assistant-v2/read-execution.ts",
+    "services/operation-preparation-service.ts",
+    "services/action-execution-service.ts",
+    "routes/v2-chat-pipeline.ts",
+    "assistant-v2/discovery/api-search-tool.ts",
+  ];
+
+  /**
+   * Codes that reach this field as literals but are deliberately NOT members.
+   * Each entry is a decision, not a silence — an unexplained addition here is
+   * the same failure the guard exists to prevent.
+   */
+  const ALLOWED_NON_MEMBERS = new Map<string, string>([
+    // Read-port internal outcomes. They reach `lastDenialCode` and therefore
+    // degrade to `internal_error` copy on an admin's screen. That is a real
+    // gap, recorded rather than fixed: adding members to `TerminalReason` is
+    // a product copy decision, out of scope for this contract repair.
+    ["clarification_already_active", "read-execution: degrades to internal_error (known gap)"],
+    ["unexpected_action_result", "read-execution: degrades to internal_error (known gap)"],
+    // Preparation-internal codes. Since the write-preparation catch was
+    // bounded to its allowlist, these can no longer escape as `outcome.code`
+    // — they are folded into `write_port_not_ready`.
+    ["missing_mutation_plan", "operation-preparation: internal, folded into write_port_not_ready"],
+    ["preparation_failed", "operation-preparation: internal, folded into write_port_not_ready"],
+    ["read_failed", "read-execution: the bounded fallback, parsed as internal_error by design"],
+    // Discovery notices, not denials: `discovery.search` returns these under
+    // `kind: "notice"` and they never populate `outcome.code`.
+    ["no_available_operation_for_auth_class", "api-search-tool: a notice kind, not a denial"],
+    ["model_unavailable", "v2-chat-pipeline: a route-level code, not a run terminal reason"],
+    ["clarification_not_pending", "v2-chat-pipeline: a route-level code, not a run terminal reason"],
+    ["clarification_not_found", "v2-chat-pipeline: a route-level code, not a run terminal reason"],
+    ["clarification_continuation_failed", "v2-chat-pipeline: a route-level code, not a run terminal reason"],
+    ["operation_id_conflict", "v2-chat-pipeline: a route-level code, not a run terminal reason"],
+    ["not_found", "v2-chat-pipeline: a 404 route-level code, not a run terminal reason"],
+    ["run_awaiting_confirmation", "v2-chat-pipeline: a route-level code, not a run terminal reason"],
+    // `failRunWithEvent` persists the RAW code for audit fidelity
+    // (`run-service.ts:105-112`); a stranded prior run is failed in the
+    // background and its code is never rendered as this turn's outcome.
+    ["stranded_active_run", "v2-chat-pipeline: an audit-only run failure code"],
+  ]);
+
+  /**
+   * Literal denial positions only. Object-literal `code: "…"` next to a
+   * `kind`/`denyCode` position, equality comparisons against a caught code,
+   * and the two union declarations whose members become codes verbatim.
+   */
+  function extract(source: string): string[] {
+    const found = new Set<string>();
+    const patterns = [
+      /\bdenyCode\(\s*"([a-z][a-z0-9_]*)"/g,
+      /\bcode:\s*"([a-z][a-z0-9_]*)"/g,
+      /\b(?:raw|thrown)\s*===\s*"([a-z][a-z0-9_]*)"/g,
+    ];
+    for (const pattern of patterns) {
+      for (const match of source.matchAll(pattern)) found.add(match[1]!);
+    }
+    // The two declarations whose members become denial codes verbatim, read by
+    // NAME rather than by "any union of string literals" — the loose form
+    // swept up unrelated unions (`"definitive_failed" | "outcome_unknown"`)
+    // and would have made the allowlist absorb everything.
+    const declarations = [
+      /type LoadedToolValidationFailure\s*=([^;]+);/,
+      /function denyCode\(reason:([^)]+)\)/,
+    ];
+    for (const declaration of declarations) {
+      const body = declaration.exec(source)?.[1];
+      if (!body) continue;
+      for (const match of body.matchAll(/"([a-z][a-z0-9_]*)"/g)) found.add(match[1]!);
+    }
+    return [...found];
+  }
+
+  it("finds no literal denial code the admin-facing union cannot express", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const unexplained: string[] = [];
+    for (const producer of PRODUCERS) {
+      const source = await readFile(new URL(producer, ROOT), "utf8");
+      for (const code of extract(source)) {
+        if (asTerminalReason(code) === code) continue;
+        if (code.startsWith("invalid_")) continue;
+        if (ALLOWED_NON_MEMBERS.has(code)) continue;
+        unexplained.push(`${producer}: ${code}`);
+      }
+    }
+    expect(unexplained, "add a TerminalReason member, or an explained allowlist entry").toEqual([]);
+  });
+
+  it("actually reads the producers (a guard that finds nothing proves nothing)", async () => {
+    const { readFile } = await import("node:fs/promises");
+    let total = 0;
+    for (const producer of PRODUCERS) {
+      total += extract(await readFile(new URL(producer, ROOT), "utf8")).length;
+    }
+    // If a refactor moves these codes out of literal positions, the guard goes
+    // blind while still passing. This is the tripwire for that.
+    expect(total).toBeGreaterThan(20);
   });
 });
