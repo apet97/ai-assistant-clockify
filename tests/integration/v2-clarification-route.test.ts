@@ -558,6 +558,81 @@ describe("T14-E: free-text continuation and new-run supersession (HTTP)", () => 
     expect(mismatched.body.code).toBe("operation_id_conflict");
   });
 
+  // `assistant_run_request_links` CHECKs that a `free_text_continuation` row has
+  // `request_id <> run_id`, and both values are client-supplied uuids here — so
+  // sending the request id AS the continuation run id looks like a way to make
+  // the INSERT throw a raw better-sqlite3 message inside the route's `try`.
+  //
+  // MEASURED: it is not. `chatPreconditions` claims the `turn_runs` row for
+  // `requestId` first, and that request id is already claimed by the ORIGINAL
+  // turn of this run (the `initial` link is written with request_id = run_id),
+  // so the durable-request-identity guard rejects the turn with a bounded code
+  // long before any link INSERT. This test exists to keep that pre-emption
+  // true: if the ordering ever changes, the constraint error becomes reachable.
+  it("a request id equal to the continuation run id is pre-empted by the identity guard", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const runId = "11111111-1111-4111-8111-111111111111";
+    seedAwaitingClarification(store, session.id, runId);
+    const cookie = cookieForSession(session, config.sessionSecret);
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "urgent please", continuationRunId: runId, requestId: runId });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("operation_id_conflict");
+    expect(res.body.code).not.toMatch(/constraint|SQLITE|assistant_run_request_links/i);
+  });
+
+  // The catch around `continueClarificationWithFreeTextAndLink` is the fifth
+  // site of the class this branch exists to close: an arbitrary caught
+  // `error.message` in the API `code` field. No route-driven input reaches it
+  // today (see the pre-emption test above), so the property is pinned where it
+  // actually lives — at the exact dependency boundary the `try` wraps. The
+  // store method performs raw SQL; anything it throws is an internal string.
+  it("never puts a caught store error message into the API code field", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const runId = "11111111-1111-4111-8111-111111111111";
+    seedAwaitingClarification(store, session.id, runId);
+    const cookie = cookieForSession(session, config.sessionSecret);
+    vi.spyOn(store, "continueClarificationWithFreeTextAndLink").mockImplementation(() => {
+      throw new Error(
+        "UNIQUE constraint failed: assistant_run_request_links.session_id, assistant_run_request_links.request_id",
+      );
+    });
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "urgent please", continuationRunId: runId });
+
+    expect(res.body.code).toBe("clarification_continuation_failed");
+    expect(res.body.message).toBe("That clarification could not be continued.");
+    expect(JSON.stringify(res.body)).not.toMatch(/constraint|assistant_run_request_links/i);
+  });
+
+  // ...but the two sentinels the store raises deliberately keep their own
+  // codes. Flattening them too would trade one truthfulness loss for another:
+  // a clarification resolved concurrently is a different fact from an
+  // unexplained failure, and the admin-facing route already has copy for it.
+  it("keeps the store's two declared sentinels as their own codes", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const runId = "11111111-1111-4111-8111-111111111111";
+    seedAwaitingClarification(store, session.id, runId);
+    const cookie = cookieForSession(session, config.sessionSecret);
+    vi.spyOn(store, "continueClarificationWithFreeTextAndLink").mockImplementation(() => {
+      throw new Error("clarification_not_pending");
+    });
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "urgent please", continuationRunId: runId });
+
+    // Same code AND same status as the route's own pending guard above, so a
+    // client branching on `code` never sees one condition under two statuses.
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("clarification_not_pending");
+  });
+
   it("an ordinary new message while a run awaits clarification supersedes it (cancelled, run failed)", async () => {
     const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });

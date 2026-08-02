@@ -20,6 +20,7 @@ import { createOperationPreparationService } from "../services/operation-prepara
 import { createClarificationService } from "../services/clarification-service.js";
 import type { Installation } from "../db/store.js";
 import { withRunScopedHostCallBudget } from "../clockify/request-governor.js";
+import { classifyLoggableError } from "../log-error-class.js";
 
 /**
  * Closure-plan PR 6 (F04): the ONE persisted run ledger governs every v2
@@ -317,10 +318,28 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
             messageContent: message,
           });
         } catch (error) {
+          // The fifth site of the class this contract exists to close: the
+          // store method here runs raw SQL, so an arbitrary caught
+          // `error.message` in the API `code` field could carry table and
+          // column names. Flat, not `asTerminalReason` — this is a
+          // route-level code, none of these values is a `TerminalReason`, and
+          // parsing would only collapse them to `internal_error`. The two
+          // sentinels the store declares keep their own codes through a
+          // CLOSED allowlist; everything else is one bounded code plus a
+          // classified operator log.
+          const sentinel = error instanceof Error
+            && (error.message === "clarification_not_found" || error.message === "clarification_not_pending")
+            ? error.message
+            : undefined;
+          if (!sentinel) {
+            console.error(`[v2-run] event=clarification_continuation_failed ${classifyLoggableError(error)}`);
+          }
           return {
             ok: false,
-            code: error instanceof Error ? error.message : "clarification_continuation_failed",
-            message: "That clarification could not be continued.",
+            code: sentinel ?? "clarification_continuation_failed",
+            message: sentinel === "clarification_not_pending"
+              ? "That clarification is no longer pending."
+              : "That clarification could not be continued.",
           };
         }
         const lastSequenceBefore = deps.store.getLastRunEventSequence(continuationScope);
