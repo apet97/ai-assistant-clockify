@@ -4,11 +4,25 @@
  *
  * Two things forced this to be a type rather than a string. An internal enum was
  * rendered verbatim to an admin ("Assistant run failed: too_many_refinements"), and
- * FOUR separate sites could put an arbitrary caught `error.message` in the same
- * field: `runner.ts` on a failed model call, and `action-execution-service.ts` on a
- * failed read dispatch, a failed write preparation, and the not-admitted tail — the
- * class of value commit 75a87a8 proved carries admin-authored text, workspace-id
- * fragments and JWT prefixes.
+ * separate sites could put an arbitrary caught `error.message` in the same field —
+ * the class of value commit 75a87a8 proved carries admin-authored text,
+ * workspace-id fragments and JWT prefixes.
+ *
+ * The site inventory, derived from `git log -p ef0bd03..HEAD` rather than from
+ * prose, because this file's own header and the branch's commit messages named
+ * DIFFERENT fourth sites — and that unpinned inventory is precisely how the
+ * fifth and sixth went unnoticed:
+ *   1. `runner.ts` — a failed model call, into `failRun`.
+ *   2. `action-execution-service.ts` — a failed read dispatch.
+ *   3. `action-execution-service.ts` — a thrown write-preparation cause
+ *      appended to the denial code.
+ *   4. `action-execution-service.ts` — the not-admitted tail.
+ *   5. `routes/v2-chat-pipeline.ts` — the free-text clarification continuation,
+ *      into the ROUTE-level `code` field, which never passes through
+ *      `asTerminalReason` and so survived the original sweep.
+ *   6. `services/operation-preparation-service.ts` — the raw message as BOTH
+ *      the receipt code and the receipt message. The only one of the six that
+ *      was rendered straight onto an admin's result card.
  *
  * `copyFor` is total over `TerminalReason`. Adding a member without copy is a compile
  * error, which is the point: the next reason cannot ship as a raw enum.
@@ -22,15 +36,25 @@
  *     `operation-preparation-service.ts` and `read-execution.ts`, which reach the
  *     same field through `lastDenialCode`.
  *
- * That last source is NOT closed at the type level: `receipt.code` is `string` — 85
- * distinct receipt codes exist in `src/harness` today — and
- * `operation-preparation-service.ts:475` admits an open `invalid_*` prefix family of
- * 35 members. Enumerating all of them would be noise; `asTerminalReason` is therefore
- * load-bearing rather than decorative — it is what makes the admin-facing field closed
- * despite a producer that types cannot close.
+ * That last source is NOT closed at the type level: `receipt.code` is `string`, and
+ * the receipt producers in `src/harness` are open by construction — many build the
+ * code from a variable, so no count of them is reproducible and none is asserted
+ * here. (A previous revision claimed 85. Counting literal `code: "…"` gives 78,
+ * which is a floor, not a measurement: 19 non-literal `code:` arguments and 199
+ * `errorReceipt`/`listReceipt` call sites sit outside any such regex.)
  *
- * `tests/unit/terminal-reason.test.ts` pins the codes those producers can actually
- * REACH this field with, so a new one is caught rather than silently degrading.
+ * The one figure that IS reproducible, with the command that reproduces it:
+ *   `operation-preparation-service.ts` admits an open `invalid_*` prefix family;
+ *   `grep -rhoE '"invalid_[a-z0-9_]+"' src | sort -u | wc -l` → 35.
+ *
+ * Enumerating those would be noise; `asTerminalReason` is therefore load-bearing
+ * rather than decorative — it is what makes the admin-facing field closed despite a
+ * producer that types cannot close.
+ *
+ * `tests/unit/terminal-reason.test.ts` pins the codes those producers reach this
+ * field with today, and derives the producer set from SOURCE so a new LITERAL code
+ * fails the build instead of silently degrading. Its own comment states what that
+ * extraction cannot see.
  */
 export type TerminalReason =
   | "cancelled"
