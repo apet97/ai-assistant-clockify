@@ -77,10 +77,15 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
     if (!type) throw new Error("custom field update requires a type and the existing type could not be resolved");
     return {
       type,
-      ...((patch.name ?? existing.name as string | undefined) !== undefined ? { name: patch.name ?? existing.name as string } : {}),
-      ...((patch.status ?? existing.status as string | undefined) !== undefined ? { status: patch.status ?? existing.status as string } : {}),
-      ...((patch.required ?? existing.required as boolean | undefined) !== undefined ? { required: patch.required ?? existing.required as boolean } : {}),
-      ...((patch.allowedValues ?? existing.allowedValues as string[] | undefined) !== undefined ? { allowedValues: patch.allowedValues ?? existing.allowedValues as string[] } : {}),
+      // `!= null` throughout: this is a full-replace PUT that re-sends every
+      // unchanged field from the list row, and Clockify returns `null` for
+      // fields that do not apply — `allowedValues` is null for TEXT/NUMBER
+      // fields. `null !== undefined` is true, so those nulls were forwarded
+      // into the JSON body of a field the admin only meant to rename.
+      ...((patch.name ?? existing.name) != null ? { name: (patch.name ?? existing.name) as string } : {}),
+      ...((patch.status ?? existing.status) != null ? { status: (patch.status ?? existing.status) as string } : {}),
+      ...((patch.required ?? existing.required) != null ? { required: (patch.required ?? existing.required) as boolean } : {}),
+      ...((patch.allowedValues ?? existing.allowedValues) != null ? { allowedValues: (patch.allowedValues ?? existing.allowedValues) as string[] } : {}),
     };
   };
   const updateAtomic = async (id: string, body: PreparedCustomFieldUpdateInput): Promise<EntitySummary> => {

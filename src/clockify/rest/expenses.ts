@@ -107,8 +107,15 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       ...(numFrom(existing.quantity) !== undefined ? { quantity: numFrom(existing.quantity) } : {}),
       ...((input.date !== undefined ? toClockifyDate(input.date) : existing.date as string | undefined) ? { date: input.date !== undefined ? toClockifyDate(input.date) : existing.date as string } : {}),
       ...((input.categoryId ?? existing.categoryId as string | undefined) ? { categoryId: input.categoryId ?? existing.categoryId as string } : {}),
-      ...((input.notes !== undefined ? input.notes : existing.notes as string | undefined) !== undefined ? { notes: input.notes !== undefined ? input.notes : existing.notes as string } : {}),
-      ...((input.billable !== undefined ? input.billable : existing.billable as boolean | undefined) !== undefined ? { billable: input.billable !== undefined ? input.billable : existing.billable as boolean } : {}),
+      // `!= null`, NOT `!== undefined`: Clockify returns `notes: null` for an
+      // expense with none, and this is a full-replace PUT that re-sends every
+      // unchanged field. `null !== undefined` is true, so the null survived and
+      // `String(null)` wrote the literal text "null" into the multipart body —
+      // replacing an empty notes field with "null" on the admin's expense
+      // whenever they edited its amount, date or category. `billable` had the
+      // identical shape.
+      ...((input.notes !== undefined ? input.notes : existing.notes) != null ? { notes: (input.notes !== undefined ? input.notes : existing.notes) as string } : {}),
+      ...((input.billable !== undefined ? input.billable : existing.billable) != null ? { billable: (input.billable !== undefined ? input.billable : existing.billable) as boolean } : {}),
       ...((input.projectId ?? existing.projectId as string | undefined) ? { projectId: input.projectId ?? existing.projectId as string } : {}),
       ...((input.taskId ?? existing.taskId as string | undefined) ? { taskId: input.taskId ?? existing.taskId as string } : {}),
     };
@@ -119,7 +126,9 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
     for (const token of input.changeFields) form.append("changeFields", token);
     for (const key of ["userId", "amount", "quantity", "date", "categoryId", "notes", "billable", "projectId", "taskId"] as const) {
       const value = input[key];
-      if (value !== undefined) form.append(key, String(value));
+      // Second line of defence at the serialization boundary: `String(null)` is
+      // the four-character string "null", which is a value, not an absence.
+      if (value != null) form.append(key, String(value));
     }
     const updated = (await core.mutate("api", "PUT", `${ws}/expenses/${id}`, form)) as { id?: string; notes?: string };
     return { id: updated?.id ?? id, name: updated?.notes ?? input.notes ?? id };

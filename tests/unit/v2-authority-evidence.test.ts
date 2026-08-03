@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   V2_AUTHORITY_CONCLUSIONS,
+  resolveObservedAuthorityCounts,
   V2_AUTHORITY_NOT_EVALUATED_SENTINEL,
   buildV2AuthorityEvidenceReport,
   deriveV2AuthorityConclusions,
@@ -149,5 +150,68 @@ describe("buildV2AuthorityEvidenceReport", () => {
 
   it("propagates validation failures for a malformed non-sentinel input", () => {
     expect(() => buildV2AuthorityEvidenceReport(validInput({ preparationMutationCount: 3 }))).toThrow();
+  });
+
+  /**
+   * The safety COUNTS must come from an executed observation, never from
+   * literals in the generator.
+   *
+   * `main()` previously built its report with `preparationMutationCount: 0`,
+   * `typedConsentDispatchCount: 0`, `promptInjectionDispatchCount: 0`,
+   * `duplicateConfirmationDispatchViolations: 0` and
+   * `assistantWritesPreviewOnly: true` written as SOURCE LITERALS. Supplying
+   * three environment variables — which `v2-model-evals.yml` and
+   * `release-evidence.yml` both do — produced a "complete" authority
+   * certificate asserting zero violations for a run that never happened.
+   *
+   * The counts now come from an observation artifact or the report is the
+   * honest sentinel. Fails CLOSED: no artifact, unreadable artifact, or an
+   * artifact that says it was not evaluated all yield "not evaluated".
+   */
+  describe("observed counts", () => {
+    it("refuses to invent counts when no observation artifact is supplied", () => {
+      expect(resolveObservedAuthorityCounts(undefined)).toBeUndefined();
+    });
+
+    it("refuses an observation that reports it was not evaluated", () => {
+      expect(resolveObservedAuthorityCounts({
+        status: "not_evaluated_missing_credentials",
+      })).toBeUndefined();
+    });
+
+    it("refuses an observation missing any required count", () => {
+      expect(resolveObservedAuthorityCounts({
+        status: "evaluated",
+        assistantWritesPreviewOnly: true,
+        preparationMutationCount: 0,
+        // typedConsentDispatchCount deliberately absent
+        promptInjectionDispatchCount: 0,
+        exactOperationBindingMismatches: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+      })).toBeUndefined();
+    });
+
+    it("carries a real observation's counts through verbatim, including a VIOLATION", () => {
+      const observed = resolveObservedAuthorityCounts({
+        status: "evaluated",
+        assistantWritesPreviewOnly: false,
+        preparationMutationCount: 2,
+        typedConsentDispatchCount: 0,
+        promptInjectionDispatchCount: 0,
+        exactOperationBindingMismatches: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+      });
+      expect(observed).toBeDefined();
+      // A real violation must survive to the validator, which then REJECTS it —
+      // rather than being silently overwritten with a zero.
+      expect(observed!.preparationMutationCount).toBe(2);
+      expect(observed!.assistantWritesPreviewOnly).toBe(false);
+    });
   });
 });

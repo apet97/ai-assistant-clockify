@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -182,6 +183,62 @@ export function deriveV2AuthorityConclusions(
  * Build the full report: the not-evaluated sentinel (coexistence default,
  * through Task 16) or a complete, validated, exact-SHA artifact (Task 17+).
  */
+/**
+ * The safety counts must come from an EXECUTED observation, never from
+ * literals in this generator.
+ *
+ * `main()` used to build its report with `preparationMutationCount: 0`,
+ * `typedConsentDispatchCount: 0`, `promptInjectionDispatchCount: 0`,
+ * `duplicateConfirmationDispatchViolations: 0` and
+ * `assistantWritesPreviewOnly: true` written directly in the source. Supplying
+ * three environment variables — which both `v2-model-evals.yml` and
+ * `release-evidence.yml` do — therefore produced a "complete" authority
+ * certificate asserting zero violations for a run that never happened. An
+ * evidence artifact that cannot be false is not evidence.
+ *
+ * Fails CLOSED at every step: no artifact, an unreadable one, one that reports
+ * it was not evaluated, or one missing any single count all yield `undefined`,
+ * which `main()` turns into the honest not-evaluated sentinel. A real violation
+ * is carried through VERBATIM so the validator rejects it, rather than being
+ * overwritten with a zero.
+ */
+export function resolveObservedAuthorityCounts(
+  observation: unknown,
+): Pick<
+  RawV2AuthorityEvidenceInput,
+  | "assistantWritesPreviewOnly"
+  | "exactOperationBindingMismatches"
+  | "preparationMutationCount"
+  | "typedConsentDispatchCount"
+  | "promptInjectionDispatchCount"
+  | "intentDeclarationCallCount"
+  | "intentCapabilityRecordCount"
+  | "intentCapabilityClaimCount"
+  | "duplicateConfirmationDispatchViolations"
+> | undefined {
+  if (!observation || typeof observation !== "object") return undefined;
+  const row = observation as Record<string, unknown>;
+  if (row.status !== "evaluated") return undefined;
+  if (typeof row.assistantWritesPreviewOnly !== "boolean") return undefined;
+  const counts: Record<string, number> = {};
+  for (const field of ZERO_FIELDS) {
+    const value = row[field];
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
+    counts[field] = value;
+  }
+  return {
+    assistantWritesPreviewOnly: row.assistantWritesPreviewOnly,
+    exactOperationBindingMismatches: counts.exactOperationBindingMismatches!,
+    preparationMutationCount: counts.preparationMutationCount!,
+    typedConsentDispatchCount: counts.typedConsentDispatchCount!,
+    promptInjectionDispatchCount: counts.promptInjectionDispatchCount!,
+    intentDeclarationCallCount: counts.intentDeclarationCallCount!,
+    intentCapabilityRecordCount: counts.intentCapabilityRecordCount!,
+    intentCapabilityClaimCount: counts.intentCapabilityClaimCount!,
+    duplicateConfirmationDispatchViolations: counts.duplicateConfirmationDispatchViolations!,
+  };
+}
+
 export function buildV2AuthorityEvidenceReport(
   input: RawV2AuthorityEvidenceInput | typeof V2_AUTHORITY_NOT_EVALUATED_SENTINEL,
 ): V2AuthorityEvidenceReport {
@@ -210,7 +267,19 @@ function main(): void {
   // Absent required inputs mean the exact-SHA artifact has not been produced
   // yet (Task 17 supplies it) — the sentinel is the correct, honest report
   // during coexistence, never a fabricated pass.
-  const report = !candidateSha || !catalogHash || assistantWriteCases === undefined
+  // The counts are READ from an executed observation. Absent or blocked, the
+  // sentinel is the only honest report — never a certificate of zero
+  // violations for a run that did not happen.
+  const observationPath = process.env.V2_AUTHORITY_OBSERVATIONS_PATH;
+  let observed: ReturnType<typeof resolveObservedAuthorityCounts>;
+  if (observationPath) {
+    try {
+      observed = resolveObservedAuthorityCounts(JSON.parse(readFileSync(observationPath, "utf8")));
+    } catch {
+      observed = undefined;
+    }
+  }
+  const report = !candidateSha || !catalogHash || assistantWriteCases === undefined || !observed
     ? buildV2AuthorityEvidenceReport(V2_AUTHORITY_NOT_EVALUATED_SENTINEL)
     : buildV2AuthorityEvidenceReport({
         schemaVersion: 1,
@@ -219,15 +288,7 @@ function main(): void {
         registryId: "v2-api",
         catalogHash,
         assistantWriteCases,
-        assistantWritesPreviewOnly: true,
-        exactOperationBindingMismatches: 0,
-        preparationMutationCount: 0,
-        typedConsentDispatchCount: 0,
-        promptInjectionDispatchCount: 0,
-        intentDeclarationCallCount: 0,
-        intentCapabilityRecordCount: 0,
-        intentCapabilityClaimCount: 0,
-        duplicateConfirmationDispatchViolations: 0,
+        ...observed,
       });
   writeDeterministicJson(outputPath, report);
 }

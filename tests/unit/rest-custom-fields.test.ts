@@ -92,6 +92,29 @@ describe("custom field rest", () => {
     expect(body.allowedValues).toEqual(["A", "B"]); // preserved
   });
 
+  /**
+   * Clockify returns `allowedValues: null` for a TEXT or NUMBER field — the
+   * concept does not apply to them. This is a full-replace PUT that re-sends
+   * every unchanged field from the list row, and `null !== undefined` is TRUE,
+   * so the null was forwarded as `allowedValues: null` in the JSON body of a
+   * field the admin only meant to rename.
+   */
+  it("omits allowedValues/required entirely when Clockify returned null for them", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse([{ id: "cf1", name: "Old", type: "TXT", status: "VISIBLE", required: null, allowedValues: null }])
+        : jsonResponse({ id: "cf1", name: "New" }),
+    );
+    await rest(f as unknown as typeof fetch).updateCustomField("cf1", { name: "New" });
+    const body = JSON.parse((f as any).mock.calls[1][1].body);
+    expect("allowedValues" in body).toBe(false);
+    expect("required" in body).toBe(false);
+    // The fields that DO have values still round-trip.
+    expect(body.name).toBe("New");
+    expect(body.type).toBe("TXT");
+    expect(body.status).toBe("VISIBLE");
+  });
+
   it("deleteCustomField issues a DELETE", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await rest(f as unknown as typeof fetch).deleteCustomField("cf1");

@@ -115,6 +115,39 @@ describe("expense rest", () => {
     expect(form.get("quantity")).toBe("50"); // re-sent so the total round-trips
   });
 
+  /**
+   * Clockify returns `notes: null` for an expense that has none, and this is a
+   * full-replace multipart PUT, so every unchanged field is re-sent from the
+   * GET. `null !== undefined` is TRUE, so the null survived the guard, and
+   * `form.append(key, String(null))` writes the literal four-character string
+   * "null" — silently REPLACING an empty notes field with the text "null" on
+   * an admin's expense whenever they edited its amount, date or category.
+   *
+   * `billable` has the identical shape and the same fate.
+   */
+  it("omits notes/billable entirely when Clockify returned null for them", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({
+            id: "x1", userId: "u1", notes: null, billable: null,
+            date: "2026-06-01T00:00:00Z", categoryId: "c1", total: 10000, quantity: 50,
+          })
+        : jsonResponse({ id: "x1" }),
+    );
+    await rest(f as unknown as typeof fetch).updateExpense("x1", {
+      changeFields: ["AMOUNT"],
+      amountMinor: 7500,
+    });
+    const form = (f as any).mock.calls[1][1].body as FormData;
+    // Not "null", and not "" either: the key must be ABSENT.
+    expect(form.get("notes")).toBeNull();
+    expect(form.get("billable")).toBeNull();
+    expect(form.getAll("notes")).toEqual([]);
+    // The fields that DO have values still round-trip.
+    expect(form.get("userId")).toBe("u1");
+    expect(form.get("categoryId")).toBe("c1");
+  });
+
   it("updateExpense converts a CHANGED amount to major (minor/100) and preserves quantity", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
