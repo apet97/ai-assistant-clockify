@@ -987,7 +987,24 @@ function evidencePath(path: string): boolean {
 
 function metadataPathMatches(declared: readonly string[], path: string): boolean {
   return declared.some((candidate) => candidate === path ||
-    (candidate.endsWith("*") && path.startsWith(candidate.slice(0, -1))));
+    (candidate.endsWith("*") && path.startsWith(candidate.slice(0, -1))) ||
+    // A declared ELEMENT path covers its own container when that container
+    // carries no elements. `collectOperationLeaves` emits an empty array as no
+    // leaves at all, but a `null` array as the bare scalar path — so an action
+    // declaring `operation.body.tagIds[]` admitted `[]` and refused `null`,
+    // which are the same absence of data.
+    //
+    // That asymmetry made every tagless time entry uneditable in production
+    // (`undeclared_server_derived_path:operation.body.tagIds` ->
+    // `intent_capability_denied` -> `write_port_not_ready`), because Clockify
+    // returns `null` for an optional id list and a GET-then-PUT body carries
+    // it through. Fixtures all had tags, so the suite stayed green.
+    //
+    // This cannot widen authority: it admits only a container whose ELEMENTS
+    // are already declared, and only when that container holds nothing. A
+    // populated array is still checked element by element, and a container
+    // that was never declared in either form is still refused.
+    candidate === `${path}[]`);
 }
 
 /** Validate the normalized durable operation and exact persisted host plan

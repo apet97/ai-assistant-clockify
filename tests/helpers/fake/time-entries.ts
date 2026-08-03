@@ -61,7 +61,19 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
     bump("prepareTimeEntryUpdate");
     const current = state.timeEntries.find((entry) => entry.id === id);
     if (!current) throw new Error("entry_not_found");
-    return { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+    // Mirror the REAL body `rest/time-entries.ts prepareTimeEntryUpdate`
+    // builds, including the wire's nulls. Clockify returns `tagIds: null` and
+    // `taskId: null` for an entry with none, and this fake used to omit the
+    // keys entirely — so a tagless entry produced no `body.tagIds` leaf at all
+    // and the write-authority check never saw the shape it refuses in
+    // production. Every preview-matrix fixture passed while editing a tagless
+    // entry was impossible on a real workspace.
+    const merged = { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+    return {
+      ...merged,
+      taskId: (merged as { taskId?: unknown }).taskId ?? null,
+      tagIds: (merged as { tagIds?: unknown }).tagIds ?? null,
+    };
   };
   const updateAtomic: WorkspaceClient["updateTimeEntryAtomic"] = async (id, body) => {
     bump("updateTimeEntryAtomic");
