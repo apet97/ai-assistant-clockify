@@ -401,10 +401,10 @@ describe("GitHub Actions workflow contracts", () => {
       );
     }
 
-    // Every report uploads even for a non-passing run (3 evals + the aggregate),
+    // Every report uploads even for a non-passing run (3 evals + observation + aggregate),
     // and the record job still aggregates honestly after an eval failure.
-    expect(workflow.match(/uses:\s*actions\/upload-artifact@/g)).toHaveLength(4);
-    expect(workflow.match(/if:\s*\$\{\{\s*always\(\)\s*\}\}/g)).toHaveLength(4);
+    expect(workflow.match(/uses:\s*actions\/upload-artifact@/g)).toHaveLength(5);
+    expect(workflow.match(/if:\s*\$\{\{\s*always\(\)\s*\}\}/g)).toHaveLength(5);
     const recordStart = workflow.indexOf("\n  record:");
     expect(recordStart).toBeGreaterThan(0);
     const recordJob = workflow.slice(recordStart);
@@ -418,6 +418,8 @@ describe("GitHub Actions workflow contracts", () => {
     expect(recordJob).toContain("V2_EVAL_API_DISCOVERY_REPORT_PATH");
     expect(recordJob).toContain("V2_EVAL_ASSISTANT_TERMINAL_REPORT_PATH");
     expect(recordJob).toContain("V2_EVAL_WRITE_SAFETY_REPORT_PATH");
+    expect(recordJob).toContain("V2_AUTHORITY_OBSERVATIONS_PATH: eval-reports/v2-write-safety-observation.json");
+    expect(recordJob).toContain('V2_AUTHORITY_EXPECTED_CHECKS: "756"');
     expect(recordJob).toContain("V2_AUTHORITY_CANDIDATE_SHA: ${{ github.sha }}");
     expect(recordJob).toContain("RELEASE_SOURCE_CANDIDATE_SHA: ${{ github.sha }}");
     expect(recordJob).toContain("RELEASE_EVIDENCE_COMMIT_SHA: ${{ github.sha }}");

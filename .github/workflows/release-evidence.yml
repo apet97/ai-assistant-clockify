@@ -799,11 +799,18 @@ jobs:
       # generator can run. Deliberately AFTER the machine-conclusion heredoc, so
       # a dependency-install failure cannot lose the v1 record.
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ inputs.tested_candidate_sha }}
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Record the candidate-bound write-safety observation
+        env:
+          V2_AUTHORITY_OBSERVATIONS_PATH: /tmp/ai-assistant-release-evidence/v2-write-safety-observation.json
+        run: npm run record:v2-write-safety-observation
       - name: Record v2 authority evidence
         # B5: replaces the Task-13 inline sentinel with the real generator. The
         # catalog hash is the v2 MODEL-API REGISTRY hash (the 127 `api` actions
@@ -815,6 +822,8 @@ jobs:
           V2_AUTHORITY_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
           V2_AUTHORITY_CATALOG_HASH: 3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7
           V2_AUTHORITY_ASSISTANT_WRITE_CASES: "84"
+          V2_AUTHORITY_EXPECTED_CHECKS: "756"
+          V2_AUTHORITY_OBSERVATIONS_PATH: /tmp/ai-assistant-release-evidence/v2-write-safety-observation.json
         run: npx tsx scripts/evidence/v2-authority-evidence.ts
       - name: Upload v2 authority evidence
         if: ${{ always() }}

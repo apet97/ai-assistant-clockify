@@ -151,6 +151,10 @@ jobs:
         # is derived from measured behaviour. One unsatisfied invariant on any
         # write fails this step, naming the write.
         run: npx vitest run tests/integration/v2-write-safety-matrix.test.ts
+      - name: Record the candidate-bound write-safety observation
+        env:
+          V2_AUTHORITY_OBSERVATIONS_PATH: evidence/evals/v2-write-safety-observation.json
+        run: npm run record:v2-write-safety-observation
       - name: Capture the write-safety accountant's report
         env:
           EVAL_WRITE_SAFETY_EVIDENCE_PATH: evidence/evals/v2-write-safety.json
@@ -180,6 +184,12 @@ jobs:
         with:
           name: v2-eval-write-safety
           path: evidence/evals/v2-write-safety.json
+      - name: Upload write-safety observation
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-eval-write-safety-observation
+          path: evidence/evals/v2-write-safety-observation.json
   record:
     needs: [guard, api-discovery, assistant-terminal, write-safety]
     # A failed or partial eval still yields an honest aggregate: a missing
@@ -211,6 +221,8 @@ jobs:
           # is rejected, which is the fail-closed intent.
           V2_AUTHORITY_CATALOG_HASH: 3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7
           V2_AUTHORITY_ASSISTANT_WRITE_CASES: "84"
+          V2_AUTHORITY_EXPECTED_CHECKS: "756"
+          V2_AUTHORITY_OBSERVATIONS_PATH: eval-reports/v2-write-safety-observation.json
         run: npx tsx scripts/evidence/v2-authority-evidence.ts
       - name: Thread the reports into ReleaseEvidenceV2Input.evaluations (B5 CLI)
         env:

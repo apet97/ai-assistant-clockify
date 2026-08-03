@@ -7,10 +7,17 @@ import {
   deriveV2AuthorityConclusions,
   validateV2AuthorityEvidence,
   type RawV2AuthorityEvidenceInput,
+  type V2AuthorityObservationBindingExpectation,
 } from "../../scripts/evidence/v2-authority-evidence.js";
 
 const VALID_SHA = "a".repeat(40);
 const VALID_CATALOG_HASH = "b".repeat(64);
+const VALID_OBSERVATION_BINDING: V2AuthorityObservationBindingExpectation = {
+  candidateSha: VALID_SHA,
+  catalogHash: VALID_CATALOG_HASH,
+  assistantWriteCases: 84,
+  expectedChecks: 756,
+};
 
 function validInput(overrides: Partial<RawV2AuthorityEvidenceInput> = {}): RawV2AuthorityEvidenceInput {
   return {
@@ -212,6 +219,82 @@ describe("buildV2AuthorityEvidenceReport", () => {
       // rather than being silently overwritten with a zero.
       expect(observed!.preparationMutationCount).toBe(2);
       expect(observed!.assistantWritesPreviewOnly).toBe(false);
+    });
+
+    it("accepts a candidate-bound observation only when its grid binding matches", () => {
+      const observed = resolveObservedAuthorityCounts({
+        status: "evaluated",
+        assistantWritesPreviewOnly: true,
+        exactOperationBindingMismatches: 0,
+        preparationMutationCount: 0,
+        typedConsentDispatchCount: 0,
+        promptInjectionDispatchCount: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+        binding: {
+          ...VALID_OBSERVATION_BINDING,
+          observationCount: VALID_OBSERVATION_BINDING.expectedChecks,
+        },
+      }, VALID_OBSERVATION_BINDING);
+      expect(observed?.assistantWritesPreviewOnly).toBe(true);
+    });
+
+    it("rejects a missing or mismatched candidate/grid binding", () => {
+      const clean = {
+        status: "evaluated",
+        assistantWritesPreviewOnly: true,
+        exactOperationBindingMismatches: 0,
+        preparationMutationCount: 0,
+        typedConsentDispatchCount: 0,
+        promptInjectionDispatchCount: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+      };
+      expect(resolveObservedAuthorityCounts(clean, VALID_OBSERVATION_BINDING)).toBeUndefined();
+      expect(resolveObservedAuthorityCounts({
+        ...clean,
+        binding: {
+          ...VALID_OBSERVATION_BINDING,
+          catalogHash: "c".repeat(64),
+          observationCount: VALID_OBSERVATION_BINDING.expectedChecks,
+        },
+      }, VALID_OBSERVATION_BINDING)).toBeUndefined();
+    });
+
+    it("turns a valid workflow handoff into complete evidence and keeps missing input sentinel", () => {
+      const observed = resolveObservedAuthorityCounts({
+        status: "evaluated",
+        assistantWritesPreviewOnly: true,
+        exactOperationBindingMismatches: 0,
+        preparationMutationCount: 0,
+        typedConsentDispatchCount: 0,
+        promptInjectionDispatchCount: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+        binding: {
+          ...VALID_OBSERVATION_BINDING,
+          observationCount: VALID_OBSERVATION_BINDING.expectedChecks,
+        },
+      }, VALID_OBSERVATION_BINDING);
+      expect(observed).toBeDefined();
+      if (!observed) throw new Error("expected a bound observation");
+      const complete = buildV2AuthorityEvidenceReport({
+        ...validInput({
+          candidateSha: VALID_OBSERVATION_BINDING.candidateSha,
+          catalogHash: VALID_OBSERVATION_BINDING.catalogHash,
+          assistantWriteCases: VALID_OBSERVATION_BINDING.assistantWriteCases,
+        }),
+        ...observed,
+      });
+      expect(complete.status).toBe("complete");
+      expect(buildV2AuthorityEvidenceReport(V2_AUTHORITY_NOT_EVALUATED_SENTINEL).status)
+        .toBe(V2_AUTHORITY_NOT_EVALUATED_SENTINEL);
     });
   });
 });

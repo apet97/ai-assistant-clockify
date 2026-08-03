@@ -508,12 +508,18 @@ describe("v2 release evidence", () => {
     // the real generator (the coupled checkout/npm pins live in
     // workflow-contracts.test.ts), so a complete artifact is producible.
     expect(release).toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+    expect(release).toContain("npm run record:v2-write-safety-observation");
+    expect(release).toContain(
+      "V2_AUTHORITY_OBSERVATIONS_PATH: /tmp/ai-assistant-release-evidence/v2-write-safety-observation.json",
+    );
     expect(release).not.toContain('status: "not_evaluated_until_pr15"');
   });
 
   it("exposes a v2 release-evidence CLI entry through an npm script", () => {
     const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { scripts?: Record<string, string> };
     expect(pkg.scripts?.["record:v2-release-evidence"]).toContain("scripts/evidence/v2-release-evidence.ts");
+    expect(pkg.scripts?.["record:v2-write-safety-observation"])
+      .toContain("scripts/evidence/v2-write-safety-observation.ts");
   });
 });
 

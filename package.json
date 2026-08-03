@@ -53,6 +53,7 @@
     "eval:api-discovery": "tsx scripts/eval-api-discovery.ts",
     "eval:assistant-terminal": "tsx scripts/eval-assistant-terminal.ts",
     "eval:write-safety": "tsx scripts/eval-write-safety.ts",
+    "record:v2-write-safety-observation": "tsx scripts/evidence/v2-write-safety-observation.ts",
     "live:v2-full": "tsx scripts/live-v2-full.ts",
     "live:sweep": "tsx scripts/live-sweep.ts",
     "audit:prod": "tsx scripts/dependency-gates/audit-prod.ts",

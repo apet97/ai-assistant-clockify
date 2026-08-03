@@ -78,6 +78,13 @@ export interface RawV2AuthorityEvidenceInput {
   structuredIntentSpanConclusion?: unknown;
 }
 
+export interface V2AuthorityObservationBindingExpectation {
+  candidateSha: string;
+  catalogHash: string;
+  assistantWriteCases: number;
+  expectedChecks: number;
+}
+
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const CATALOG_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -204,6 +211,7 @@ export function deriveV2AuthorityConclusions(
  */
 export function resolveObservedAuthorityCounts(
   observation: unknown,
+  expectedBinding?: V2AuthorityObservationBindingExpectation,
 ): Pick<
   RawV2AuthorityEvidenceInput,
   | "assistantWritesPreviewOnly"
@@ -220,22 +228,39 @@ export function resolveObservedAuthorityCounts(
   const row = observation as Record<string, unknown>;
   if (row.status !== "evaluated") return undefined;
   if (typeof row.assistantWritesPreviewOnly !== "boolean") return undefined;
+  if (expectedBinding !== undefined) {
+    const binding = row.binding;
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) return undefined;
+    const bindingRecord = binding as Record<string, unknown>;
+    if (
+      bindingRecord.candidateSha !== expectedBinding.candidateSha
+      || bindingRecord.catalogHash !== expectedBinding.catalogHash
+      || bindingRecord.assistantWriteCases !== expectedBinding.assistantWriteCases
+      || bindingRecord.expectedChecks !== expectedBinding.expectedChecks
+      || bindingRecord.observationCount !== expectedBinding.expectedChecks
+    ) return undefined;
+  }
   const counts: Record<string, number> = {};
   for (const field of ZERO_FIELDS) {
     const value = row[field];
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0) return undefined;
     counts[field] = value;
   }
+  const count = (field: (typeof ZERO_FIELDS)[number]): number => {
+    const value = counts[field];
+    if (value === undefined) throw new Error(`validated authority observation lost ${field}`);
+    return value;
+  };
   return {
     assistantWritesPreviewOnly: row.assistantWritesPreviewOnly,
-    exactOperationBindingMismatches: counts.exactOperationBindingMismatches!,
-    preparationMutationCount: counts.preparationMutationCount!,
-    typedConsentDispatchCount: counts.typedConsentDispatchCount!,
-    promptInjectionDispatchCount: counts.promptInjectionDispatchCount!,
-    intentDeclarationCallCount: counts.intentDeclarationCallCount!,
-    intentCapabilityRecordCount: counts.intentCapabilityRecordCount!,
-    intentCapabilityClaimCount: counts.intentCapabilityClaimCount!,
-    duplicateConfirmationDispatchViolations: counts.duplicateConfirmationDispatchViolations!,
+    exactOperationBindingMismatches: count("exactOperationBindingMismatches"),
+    preparationMutationCount: count("preparationMutationCount"),
+    typedConsentDispatchCount: count("typedConsentDispatchCount"),
+    promptInjectionDispatchCount: count("promptInjectionDispatchCount"),
+    intentDeclarationCallCount: count("intentDeclarationCallCount"),
+    intentCapabilityRecordCount: count("intentCapabilityRecordCount"),
+    intentCapabilityClaimCount: count("intentCapabilityClaimCount"),
+    duplicateConfirmationDispatchViolations: count("duplicateConfirmationDispatchViolations"),
   };
 }
 
@@ -263,6 +288,7 @@ function main(): void {
   const candidateSha = process.env.V2_AUTHORITY_CANDIDATE_SHA;
   const catalogHash = process.env.V2_AUTHORITY_CATALOG_HASH;
   const assistantWriteCases = envInt("V2_AUTHORITY_ASSISTANT_WRITE_CASES");
+  const expectedChecks = envInt("V2_AUTHORITY_EXPECTED_CHECKS");
 
   // Absent required inputs mean the exact-SHA artifact has not been produced
   // yet (Task 17 supplies it) — the sentinel is the correct, honest report
@@ -274,7 +300,12 @@ function main(): void {
   let observed: ReturnType<typeof resolveObservedAuthorityCounts>;
   if (observationPath) {
     try {
-      observed = resolveObservedAuthorityCounts(JSON.parse(readFileSync(observationPath, "utf8")));
+      const expectedBinding = candidateSha && catalogHash && assistantWriteCases !== undefined && expectedChecks !== undefined
+        ? { candidateSha, catalogHash, assistantWriteCases, expectedChecks }
+        : undefined;
+      observed = expectedBinding === undefined
+        ? undefined
+        : resolveObservedAuthorityCounts(JSON.parse(readFileSync(observationPath, "utf8")), expectedBinding);
     } catch {
       observed = undefined;
     }
