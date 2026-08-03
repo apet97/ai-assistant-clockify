@@ -167,7 +167,16 @@ async function loadStructureProjection(
       return await ctx.clockify.prepareTaskUpdate(projectId, id, {});
     }
     if (type === "tag") return await ctx.clockify.prepareTagUpdate(id, {});
-    if (type === "time_entry") return await ctx.clockify.prepareTimeEntryUpdate({ id });
+    if (type === "time_entry") {
+      // The adapter's PUT body has no `id` (see rest/time-entries.ts), but
+      // `fetchStructureSnapshot` requires the re-fetched projection to carry a
+      // string one — so target verification failed for EVERY time entry with
+      // "The target changed or could not be verified. No Clockify mutation was
+      // sent.", and no entry could be edited. The id is not new information:
+      // this projection was fetched BY that id. Capture and re-fetch both come
+      // through here, so both sides of the fingerprint stay symmetric.
+      return { id, ...(await ctx.clockify.prepareTimeEntryUpdate({ id })) };
+    }
   } catch {
     return undefined;
   }

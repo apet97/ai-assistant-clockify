@@ -190,7 +190,10 @@ describe("v2 time entry update delete and invoiced API actions", () => {
     }
   });
 
-  it("clockify_entries_update previews with GET support then commits one PUT", async () => {
+  // Renamed: this only PREVIEWS. The old name claimed "then commits one PUT",
+  // which is why nobody noticed the confirm path was untested — and broken.
+  // The commit half lives in `entries-update-commit.test.ts`.
+  it("clockify_entries_update previews with GET support and sends no mutation", async () => {
     const fake = createFakeWorkspace({
       entries: [{ id: "e1", description: "Before", start: "2026-06-05T09:00:00Z", end: "2026-06-05T10:00:00Z" }],
     });

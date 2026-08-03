@@ -68,12 +68,21 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
     // and the write-authority check never saw the shape it refuses in
     // production. Every preview-matrix fixture passed while editing a tagless
     // entry was impossible on a real workspace.
-    const merged = { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+    const merged = { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) } as Record<string, unknown>;
+    // EXACTLY the seven keys `rest/time-entries.ts prepareTimeEntryUpdate`
+    // returns — no `id`, and the wire's nulls. Spreading the whole stored entry
+    // handed callers an `id` the real adapter never sends, which is what let
+    // `fetchStructureSnapshot` (it requires a string `id`) pass here and fail
+    // in production with "The target changed or could not be verified".
     return {
-      ...merged,
-      taskId: (merged as { taskId?: unknown }).taskId ?? null,
-      tagIds: (merged as { tagIds?: unknown }).tagIds ?? null,
-    };
+      start: merged.start,
+      end: merged.end ?? undefined,
+      description: merged.description,
+      projectId: merged.projectId ?? null,
+      taskId: merged.taskId ?? null,
+      tagIds: merged.tagIds ?? null,
+      billable: merged.billable,
+    } as Awaited<ReturnType<WorkspaceClient["prepareTimeEntryUpdate"]>>;
   };
   const updateAtomic: WorkspaceClient["updateTimeEntryAtomic"] = async (id, body) => {
     bump("updateTimeEntryAtomic");
