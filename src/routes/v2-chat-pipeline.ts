@@ -578,7 +578,11 @@ function attachRunEventsPage(
       now: deps.now,
     });
     const page = eventViews.list({ scope, runId, after, limit: 200 });
-    return { ...turn, runEvents: page };
+    // Carry the WATERMARK this page was read from. A replay must reproduce what
+    // the admin originally saw, and a continuation turn's page starts at the
+    // sequence the turn began from — not at 0. Replaying from 0 would hand back
+    // the whole run, including cards the original response never contained.
+    return { ...turn, runEvents: page, runEventsAfter: after };
   } catch {
     console.error("run-event delivery degraded (reply preserved; error details suppressed)");
     return turn;

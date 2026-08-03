@@ -328,6 +328,55 @@ describe("UI runtime protocol contracts", () => {
     expect(chat.ok && chat.results[0]?.kind).toBe("clarify");
     expect(() => decodeChatResponse({ ok: true, reply: { kind: "answer" }, results: [] })).toThrow(ProtocolError);
 
+    // v1 payloads never carry runId/runEvents — decoding must stay unchanged.
+    const v1Chat = decodeChatResponse({ ok: true, reply: { kind: "answer", text: "Done." }, results: [] });
+    expect(v1Chat.ok).toBe(true);
+    if (v1Chat.ok) {
+      expect(v1Chat.runId).toBeUndefined();
+      expect(v1Chat.runEvents).toBeUndefined();
+    }
+
+    // v2 optionally carries runId + a strictly-decoded run-event page (T08).
+    const v2Chat = decodeChatResponse({
+      ok: true,
+      reply: { kind: "actions", text: "" },
+      results: [],
+      runId: "run-1",
+      runEvents: {
+        runId: "run-1",
+        nextAfter: 1,
+        hasMore: false,
+        lastSequence: 1,
+        events: [{
+          runId: "run-1",
+          sequence: 1,
+          event: { eventType: "model.completed", payload: {}, createdAt: "2026-08-03T00:00:00.000Z" },
+          attachment: { kind: "assistant_message", messageId: "m1", text: "Hi" },
+        }],
+      },
+    });
+    expect(v2Chat.ok).toBe(true);
+    if (v2Chat.ok) {
+      expect(v2Chat.runId).toBe("run-1");
+      expect(v2Chat.runEvents?.events).toHaveLength(1);
+      expect(v2Chat.runEvents?.events[0]?.attachment).toMatchObject({ kind: "assistant_message", text: "Hi" });
+    }
+
+    // A malformed run-event page is REJECTED, not silently dropped or ignored.
+    expect(() => decodeChatResponse({
+      ok: true,
+      reply: { kind: "actions", text: "" },
+      results: [],
+      runId: "run-1",
+      runEvents: {
+        runId: "run-1",
+        nextAfter: 1,
+        hasMore: false,
+        lastSequence: 1,
+        events: [{ runId: "run-1", sequence: "not-a-number", event: { eventType: "model.completed", payload: {}, createdAt: "2026-08-03T00:00:00.000Z" } }],
+      },
+    })).toThrow(ProtocolError);
+
     expect(decodeConfirmResponse({
       ok: true,
       receipt: { ok: true, action: "clockify_tags_create" },

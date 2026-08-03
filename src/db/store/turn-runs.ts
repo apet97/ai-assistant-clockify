@@ -100,8 +100,12 @@ export function buildTurnRunStore(ctx: StoreContext): {
       db.transaction(() => {
         const value = response && typeof response === "object" ? response as Record<string, unknown> : {};
         const body = value.body && typeof value.body === "object" ? value.body as Record<string, unknown> : undefined;
+        // T07: strip both `results` (v1's inline result array) and `runEvents`
+        // (v2's hydrated event page — replayed events, incl. any live
+        // confirmation nonce, must never be persisted) while retaining the
+        // non-secret `runId` marker a replay uses to rebuild a fresh page.
         const envelope = body
-          ? { ...value, body: Object.fromEntries(Object.entries(body).filter(([key]) => key !== "results")) }
+          ? { ...value, body: Object.fromEntries(Object.entries(body).filter(([key]) => key !== "results" && key !== "runEvents")) }
           : value;
         db.prepare(
           "UPDATE turn_runs SET status = ?, response_envelope_json = ?, updated_at = ? WHERE session_id = ? AND request_id = ?",

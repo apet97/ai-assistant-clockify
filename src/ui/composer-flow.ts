@@ -12,16 +12,53 @@
  */
 
 import { ApiError, httpErrorMessage } from "./api-client.js";
-import { dispatchStreamEvent, PreviewBuffer, type ChatResult, type StreamEvent } from "./shared.js";
+import { attachmentToResults, dispatchStreamEvent, PreviewBuffer, type ChatResult, type StreamEvent } from "./shared.js";
+import type { SequencedRunEvent } from "../shared/contracts.js";
 
 // ---------------------------------------------------------------------------
 // Chat response shapes + the responsive send flow (testable core).
 // ---------------------------------------------------------------------------
 
+/** The embedded run-event page a v2 `ChatResponse` may carry (T08), decoded
+ * upstream by `decodeChatResponse`'s strict `runEvents` field — same shape
+ * `GET /api/runs/:id/events` returns minus the `ok` discriminator. */
+export interface ChatRunEventsPage {
+  runId: string;
+  events: SequencedRunEvent[];
+  nextAfter: number;
+  hasMore: boolean;
+  lastSequence: number;
+}
+
 export interface ChatResponse {
   ok: boolean;
   reply: { kind: string; text: string };
   results: ChatResult[];
+  runId?: string;
+  runEvents?: ChatRunEventsPage;
+}
+
+/**
+ * Render a v2 chat turn's embedded run-event page through the SAME
+ * `attachmentToResults` semantics the NDJSON stream and history restore use —
+ * no parallel rendering path. `assistant_message` attachments are
+ * deliberately SKIPPED here: `submitMessage` already renders `reply.text` as
+ * the one assistant bubble for this turn, so replaying the run event too
+ * would duplicate it (T08 requirement 3). Other attachment kinds
+ * (`presented_result`, `pending_confirmation`, `pending_clarification`) flow
+ * through unchanged; previews are batched so a multi-step batch still
+ * surfaces one "Confirm all" card.
+ */
+export function applyChatRunEvents(page: ChatRunEventsPage, hooks: Pick<ComposerHooks, "onResults">): void {
+  const buffer = new PreviewBuffer((results) => hooks.onResults(results));
+  for (const entry of page.events) {
+    if (!entry.attachment || entry.attachment.kind === "assistant_message") continue;
+    for (const result of attachmentToResults(entry.attachment)) {
+      if (result.kind === "preview") buffer.push(result);
+      else hooks.onResults([result]);
+    }
+  }
+  buffer.flush();
 }
 
 /** Minimal API surface the send flow needs (so it's trivial to test). */
@@ -68,6 +105,11 @@ export async function submitMessage(api: ChatApiLike, message: string, hooks: Co
     }
     if (response.reply?.text) hooks.onAssistant(response.reply.text);
     hooks.onResults(response.results ?? []);
+    // v2 only (T08): a run-event page rides along on the JSON response/replay
+    // so a non-streaming turn renders the same preview/receipt/clarify cards
+    // the NDJSON stream would. v1 never sets `runEvents`, so this is a no-op
+    // for v1 — `results` behaviour above is completely unchanged either way.
+    if (response.runEvents) applyChatRunEvents(response.runEvents, hooks);
   } catch (error) {
     hooks.onError(error instanceof ApiError ? error.message : "Message failed to send.");
   } finally {

@@ -1,5 +1,5 @@
 import { Router, type Response } from "express";
-import type { RunEventFrame } from "../assistant-v2/events.js";
+import type { RunEventFrame, RunEventPage } from "../assistant-v2/events.js";
 import type { SessionClaims } from "../auth/sessions.js";
 import type { HistoryService } from "../services/history-service.js";
 import type { SessionContextService } from "../services/session-context-service.js";
@@ -125,7 +125,23 @@ export function chatRouter(options: {
     }
     const status = turn.ok ? 200 : 502;
     const body = turn.ok
-      ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
+      ? {
+          ok: true,
+          // v2 only: the turn's own run id, and its hydrated event page —
+          // the canonical v2 result/control source (T07). v1 never sets
+          // `turn.runEvents`, so v1 responses are byte-identical to before.
+          ...(turn.runEvents
+            ? {
+                runId: turn.runEvents.runId,
+                runEvents: turn.runEvents,
+                // Non-secret integer; survives into the persisted envelope so a
+                // replay can read the SAME window rather than the whole run.
+                runEventsAfter: turn.runEventsAfter ?? 0,
+              }
+            : {}),
+          reply: { kind: turn.replyKind, text: turn.replyText },
+          results: turn.results,
+        }
       : { ok: false, code: turn.code, message: turn.message };
     options.finishTurnRun(
       pre.claims.sessionId,
@@ -145,9 +161,35 @@ export function chatRouter(options: {
     if (!pre) return;
     const { write, signal } = openNdjsonStream(res);
     if (pre.replay) {
-      const body = pre.replay.body as { ok?: boolean; reply?: { kind?: string; text?: string }; results?: unknown[]; code?: string; message?: string };
+      const body = pre.replay.body as {
+        ok?: boolean;
+        reply?: { kind?: string; text?: string };
+        results?: unknown[];
+        // A named `import type` at the top, NOT an inline `import("…")` type
+        // annotation: the layer-boundary check parses the latter as a runtime
+        // dynamic import and correctly refuses it.
+        runEvents?: RunEventPage;
+        code?: string;
+        message?: string;
+      };
       if (body.ok) {
-        for (const result of body.results ?? []) write({ type: "result", result });
+        // T07: a v2 replay carries its reconstructed run-event page instead of
+        // `results` — replay its frames in the SAME order as the original
+        // turn (run_event(s), then reply, then done).
+        if (body.runEvents) {
+          for (const item of body.runEvents.events) {
+            const frame: RunEventFrame = {
+              type: "run_event",
+              runId: body.runEvents.runId,
+              sequence: item.sequence,
+              event: item.event,
+              ...(item.attachment ? { attachment: item.attachment } : {}),
+            };
+            write(frame);
+          }
+        } else {
+          for (const result of body.results ?? []) write({ type: "result", result });
+        }
         write({ type: "reply", kind: body.reply?.kind ?? "answer", text: body.reply?.text ?? "" });
       } else {
         write({ type: "error", code: body.code ?? "operation_failed", message: body.message ?? "The prior request failed." });
@@ -168,7 +210,23 @@ export function chatRouter(options: {
       ));
       const status = turn.ok ? 200 : 502;
       const body = turn.ok
-        ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
+        ? {
+            ok: true,
+            // Persist the same v2 marker/page shape as the JSON route (T07)
+            // so a later replay of THIS requestId — JSON or stream — can
+            // reconstruct a fresh event page from the bare `runId`.
+            ...(turn.runEvents
+            ? {
+                runId: turn.runEvents.runId,
+                runEvents: turn.runEvents,
+                // Non-secret integer; survives into the persisted envelope so a
+                // replay can read the SAME window rather than the whole run.
+                runEventsAfter: turn.runEventsAfter ?? 0,
+              }
+            : {}),
+            reply: { kind: turn.replyKind, text: turn.replyText },
+            results: turn.results,
+          }
         : { ok: false, code: turn.code, message: turn.message };
       options.finishTurnRun(
         pre.claims.sessionId,

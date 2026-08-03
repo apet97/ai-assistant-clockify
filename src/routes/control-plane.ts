@@ -60,6 +60,7 @@ import {
   type ConfirmableOperation,
 } from "../harness/action.js";
 import type { AtomicIdempotencyLedger } from "../harness/idempotency.js";
+import { createRunEventViewService } from "../services/run-event-view-service.js";
 import { reversibleCreations } from "../harness/undo.js";
 import { actionFingerprint, catalogHash} from "../harness/catalog.js";
 import { canWrite, type AdminPolicy } from "../harness/permissions.js";
@@ -106,6 +107,10 @@ export type ChatTurnOutcome =
        * delivered on the ORIGINAL turn. v1 never sets it; the routes treat it
        * as absent. */
       runEvents?: import("../assistant-v2/events.js").RunEventPage;
+      /** The `after` watermark that page was read from. A continuation turn
+       * starts mid-run, so a replay must re-read the SAME window; reading from
+       * 0 would return cards the original response never carried. */
+      runEventsAfter?: number;
     }
   | { ok: false; code: string; message: string };
 
@@ -222,6 +227,16 @@ export function createControlPlane(deps: AppDeps): ControlPlane {
     verifyWriteAuthority,
     actionContext,
   } = createRouteAuthority(deps, now);
+
+  // T07: the scoped v2 replay reconstructor. A v2 turn's persisted envelope
+  // carries only its bare `runId` (never hydrated events or a plaintext
+  // nonce — `finishTurnRun` strips both); a same-requestId JSON/stream
+  // replay rebuilds the event page fresh, through the SAME hydrator that
+  // rotates the live confirmation nonce on the original turn.
+  const v2ReplayEventViews = createRunEventViewService(deps.store, {
+    sessionSecret: deps.config.sessionSecret,
+    now,
+  });
 
   /** Record a one-use undo for a successful reversible creation; return its id. */
   function recordUndoIfReversible(
@@ -623,6 +638,51 @@ export function createControlPlane(deps: AppDeps): ControlPlane {
       const storedBody = storedResponse.body && typeof storedResponse.body === "object"
         ? storedResponse.body as Record<string, unknown>
         : undefined;
+      // T07: a v2 envelope's marker is its bare `runId` (v1 never persists
+      // one). The stored envelope carries no `runEvents`/`results` —
+      // `finishTurnRun` strips both — so this is the ONLY reconstruction
+      // path; there is nothing v1-shaped left to fall through to for a v2 row.
+      const v2RunId = storedBody && typeof storedBody.runId === "string" ? storedBody.runId : undefined;
+      if (v2RunId) {
+        const v2Scope = {
+          sessionId: claims.sessionId,
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          installationGeneration: installation.generation,
+          authClass: "addon" as const,
+        };
+        let v2ReplayBody: Record<string, unknown> = { ...storedBody, results: [] };
+        try {
+          // `.list()` re-runs the SAME hydrator the original turn used, which
+          // rotates any live pending-confirmation nonce and updates its
+          // stored hash — never persisting the plaintext nonce or the
+          // hydrated page itself.
+          // The ORIGINAL window, not the whole run: a continuation turn's page
+          // began at the sequence that turn started from, so replaying from 0
+          // would hand back events the admin never saw in that response.
+          const storedAfter = storedBody?.runEventsAfter;
+          const replayAfter = typeof storedAfter === "number" && Number.isSafeInteger(storedAfter) && storedAfter >= 0
+            ? storedAfter
+            : 0;
+          const page = v2ReplayEventViews.list({ scope: v2Scope, runId: v2RunId, after: replayAfter, limit: 200 });
+          if (page.events.length > 0) {
+            v2ReplayBody = { ...v2ReplayBody, runEvents: page };
+          } else {
+            console.error(`[v2-replay] event=run_event_page_unavailable run_id=${v2RunId}`);
+          }
+        } catch (error) {
+          // The page is gone: preserve the stored reply, omit controls and
+          // results, never reuse a stale nonce or invent a result.
+          console.error(`[v2-replay] event=run_event_page_unavailable ${classifyLoggableError(error)}`);
+        }
+        return {
+          claims,
+          installation,
+          message: parsed.data.message,
+          requestId,
+          replay: { ...storedResponse, body: v2ReplayBody },
+        };
+      }
       const storedResults = Array.isArray(storedBody?.results) ? storedBody.results : [];
       const replayResults: unknown[] = [];
       for (const result of storedResults) {

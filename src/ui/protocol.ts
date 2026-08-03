@@ -136,10 +136,28 @@ export interface SessionsResponse {
   }>;
 }
 
+/** A v2 chat turn's durable run-event page, embedded (not envelope-wrapped) in
+ * `ChatResponse`/replay. Same shape `decodeRunEventsResponse` decodes at the
+ * top level, minus the `ok` discriminator. */
+export interface ChatRunEventsPage {
+  runId: string;
+  events: import("../shared/contracts.js").SequencedRunEvent[];
+  nextAfter: number;
+  hasMore: boolean;
+  lastSequence: number;
+}
+
 export interface ChatResponse {
   ok: true;
   reply: { kind: string; text: string };
   results: ChatResult[];
+  /** v2 only: the durable run id/event page for this turn, present so a JSON
+   * response or same-request-id replay can render the same cards the NDJSON
+   * stream would. Absent under v1 and absent when the turn produced no run
+   * (e.g. a pure clarification-free single read is still tagged, but a hard
+   * v1 rollback simply never sets it). */
+  runId?: string;
+  runEvents?: ChatRunEventsPage;
 }
 
 export interface UndoResponse {
@@ -538,11 +556,19 @@ export function decodeSessionsResponse(value: unknown): SessionsResponse | ApiFa
   return { ok: true, sessions };
 }
 
-/** Decode the maintained non-streaming turn response. */
+/** Decode the maintained non-streaming turn response. `runId`/`runEvents` are
+ * OPTIONAL (v1 never sends them; a v2 turn with nothing to attach may omit
+ * `runEvents` too) but, when present, `runEvents` is decoded with the exact
+ * strict decoder the NDJSON/run-events paths use — a malformed page throws
+ * `ProtocolError` rather than being silently dropped. */
 export function decodeChatResponse(value: unknown): ChatResponse | ApiFailure {
   const envelope = decodeApiEnvelope(value);
   if (!envelope.ok) return failureFrom(envelope);
   const reply = record(envelope.reply, "API response.reply");
+  const runId = optionalString(envelope.runId, "API response.runId");
+  const runEvents = envelope.runEvents === undefined
+    ? undefined
+    : decodeRunEventsPage(record(envelope.runEvents, "API response.runEvents"), "API response.runEvents");
   return {
     ok: true,
     reply: {
@@ -550,6 +576,8 @@ export function decodeChatResponse(value: unknown): ChatResponse | ApiFailure {
       text: string(reply.text, "API response.reply.text"),
     },
     results: array(envelope.results, "API response.results", (result) => decodeResult(result)),
+    ...(runId ? { runId } : {}),
+    ...(runEvents ? { runEvents } : {}),
   };
 }
 
@@ -870,30 +898,39 @@ function decodeRunEventAttachment(value: unknown): import("../shared/contracts.j
   throw new ProtocolError("stream event.attachment.kind is unknown");
 }
 
-/** Decode one scoped run-event page for UI restoration. */
-export function decodeRunEventsResponse(value: unknown): import("./shared.js").RunEventPageResponse | ApiFailure {
-  const envelope = decodeApiEnvelope(value);
-  if (!envelope.ok) return failureFrom(envelope);
-  const events = array(envelope.events, "API response.events", (entry, name) => {
-    const item = record(entry, name);
-    const eventRecord = record(item.event, `${name}.event`);
+/**
+ * Decode the run-id/events/paging fields shared by the scoped run-events
+ * route's envelope AND the embedded page a v2 `ChatResponse` carries — the
+ * SAME strict decoding either way (T08: no second, looser parser for the
+ * JSON-fallback/replay path).
+ */
+function decodeRunEventsPage(source: Record<string, unknown>, name: string): ChatRunEventsPage {
+  const events = array(source.events, `${name}.events`, (entry, entryName) => {
+    const item = record(entry, entryName);
+    const eventRecord = record(item.event, `${entryName}.event`);
     return {
-      runId: string(item.runId, `${name}.runId`),
-      sequence: positiveInteger(item.sequence, `${name}.sequence`),
+      runId: string(item.runId, `${entryName}.runId`),
+      sequence: positiveInteger(item.sequence, `${entryName}.sequence`),
       event: {
-        eventType: string(eventRecord.eventType, `${name}.event.eventType`),
+        eventType: string(eventRecord.eventType, `${entryName}.event.eventType`),
         payload: eventRecord.payload,
-        createdAt: isoString(eventRecord.createdAt, `${name}.event.createdAt`),
+        createdAt: isoString(eventRecord.createdAt, `${entryName}.event.createdAt`),
       } as import("../shared/contracts.js").RunEventView,
       ...(item.attachment === undefined ? {} : { attachment: decodeRunEventAttachment(item.attachment) }),
     };
   });
   return {
-    ok: true,
-    runId: string(envelope.runId, "API response.runId"),
+    runId: string(source.runId, `${name}.runId`),
     events,
-    nextAfter: positiveInteger(envelope.nextAfter, "API response.nextAfter"),
-    hasMore: boolean(envelope.hasMore, "API response.hasMore"),
-    lastSequence: positiveInteger(envelope.lastSequence, "API response.lastSequence"),
+    nextAfter: positiveInteger(source.nextAfter, `${name}.nextAfter`),
+    hasMore: boolean(source.hasMore, `${name}.hasMore`),
+    lastSequence: positiveInteger(source.lastSequence, `${name}.lastSequence`),
   };
+}
+
+/** Decode one scoped run-event page for UI restoration. */
+export function decodeRunEventsResponse(value: unknown): import("./shared.js").RunEventPageResponse | ApiFailure {
+  const envelope = decodeApiEnvelope(value);
+  if (!envelope.ok) return failureFrom(envelope);
+  return { ok: true, ...decodeRunEventsPage(envelope, "API response") };
 }
