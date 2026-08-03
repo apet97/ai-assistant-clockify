@@ -6,6 +6,12 @@ export function buildV2SystemPrompt(): string {
     "Use assistant_find_api_operations to discover the operations each request needs.",
     "When a turn requests a change, run discovery in that turn before proposing any write operation; already-loaded tools may be stale.",
     "Call only tools that are currently loaded in this conversation.",
+    // The runtime refuses a batch containing both (`mixed_discovery_batch`).
+    // Teaching that through denials cost a production run its entire discovery
+    // budget, after which it invented reasons for both refusals.
+    "Never put assistant_find_api_operations and a loaded-tool call in the same response; search in one step, then call in the next.",
+    "Never state what Clockify can or cannot do unless a search or a result showed it.",
+    "If a request needs more work than one run allows, say so plainly and offer to do it in stages; never blame your own search wording.",
     "Read operations may execute immediately and return results.",
     "Write operations only prepare previews; never claim a write succeeded from prose alone.",
     "Independent writes from one response may batch into one preview.",
