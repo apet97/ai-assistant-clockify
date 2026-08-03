@@ -124,9 +124,29 @@ export function createApiDiscoveryService(deps: ApiDiscoveryDeps) {
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
       const searchResult = await deps.discovery.search(parsed, scope);
+      const loadedBefore = new Set(state.loadedToolNames);
       state.loadedToolNames = [
         ...refineLoadedToolSet(new Set(state.loadedToolNames), new Set(state.usedToolNames), searchResult),
       ];
+      // A successful search used to push NO observation, so the model's only
+      // feedback was the operation list itself — identical every time it
+      // re-ran the same query, and therefore indistinguishable from new
+      // information. Production run 562f149d spent two of its four searches
+      // re-fetching an unchanged set that already contained everything the
+      // request needed, then died on `too_many_refinements`. Say what the
+      // search actually CHANGED.
+      const added = state.loadedToolNames.filter(
+        (name) => name !== DISCOVERY_META_TOOL_NAME && !loadedBefore.has(name),
+      );
+      observations.push({
+        kind: "result",
+        actionName: call.name,
+        summary: added.length > 0
+          ? `loaded ${added.length} new operation(s): ${added.join(", ")}.`
+          : "no new operations — every match was already loaded."
+            + " Searching again with a similar query will return the same set and waste the search budget;"
+            + " call the operations you already have instead.",
+      });
       if (!state.usedToolNames.includes(call.name)) state.usedToolNames.push(call.name);
       deps.eventService.loadOperations({
         scope: scopedRun(state),

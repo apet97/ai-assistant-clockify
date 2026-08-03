@@ -10,6 +10,11 @@ export function buildV2SystemPrompt(): string {
     // Teaching that through denials cost a production run its entire discovery
     // budget, after which it invented reasons for both refusals.
     "Never put assistant_find_api_operations and a loaded-tool call in the same response; search in one step, then call in the next.",
+    // Two runs died `no_progress` having searched `access: "write"` twice: they
+    // loaded five entry-write operations, had no ids to write to, and never
+    // connected that the ids come from a read they had filtered out.
+    "Changing existing records needs their ids, which come from a read: discover and run that read first, and do not restrict discovery to write operations.",
+    "A search that reports no new operations means you already have them — call them; searching again returns the same set and wastes the budget.",
     "Never state what Clockify can or cannot do unless a search or a result showed it.",
     "If a request needs more work than one run allows, say so plainly and offer to do it in stages; never blame your own search wording.",
     "Read operations may execute immediately and return results.",

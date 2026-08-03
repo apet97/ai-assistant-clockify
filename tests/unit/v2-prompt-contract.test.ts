@@ -59,3 +59,18 @@ describe("v2 system prompt keeps searches and calls in separate steps", () => {
     expect(prompt).toMatch(/stages|one run/i);
   });
 });
+
+/**
+ * Runs 1837eee1 and ed1c275a (2026-08-03) both died `no_progress` after issuing
+ * the SAME `access: "write"` search twice: they loaded five entry-write
+ * operations, had no entry ids to write to, and never worked out that the ids
+ * come from a READ they had filtered out of their own discovery.
+ */
+describe("v2 system prompt says where ids come from", () => {
+  it("tells the model to read the records before changing them", () => {
+    const prompt = buildV2SystemPrompt();
+    expect(prompt).toMatch(/ids/i);
+    expect(prompt).toMatch(/read/i);
+    expect(prompt).toContain("do not restrict discovery to write operations");
+  });
+});
