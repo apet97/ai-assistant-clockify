@@ -71,7 +71,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     );
 
     const res = await c.chat("list Alice's time entries");
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
 
     const runId = c.activeRunId();
     const row = clarificationRowsFor(c.store, c.sessionId, runId);
@@ -149,7 +149,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
       .post(`/api/clarifications/${row.id}/resolve`)
       .set("Cookie", c.cookie)
       .send({ optionId: ALICE_TWO });
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
     const frames = ndjsonFrames(res.text);
     expect(frames.at(-1)?.type).toBe("done");
 
@@ -256,14 +256,14 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
       .post(`/api/clarifications/${row.id}/resolve`)
       .set("Cookie", c.cookie)
       .send({ optionId: ALICE_ONE });
-    expect(rejected.status).toBe(400);
+    expect(rejected.status, JSON.stringify(rejected.body)).toBe(400);
     expect(rejected.body.code).toBe("unknown_option");
     // A rejected option leaves the clarification answerable.
     expect(clarificationRowsFor(c.store, c.sessionId, runId)?.status).toBe("pending");
 
     // Free-text continuation still resumes the same run.
     const continued = await c.chat("use yesterday instead", { continuationRunId: runId });
-    expect(continued.status).toBe(200);
+    expect(continued.status, JSON.stringify(continued.body)).toBe(200);
     const settled = c.store.getPendingClarification(row.id, c.runScope(runId));
     expect(settled?.status).toBe("continued");
     expect(settled?.terminalReason).toBe("free_text_continuation");
@@ -290,7 +290,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     ]);
 
     const res = await c.chat("list entries for Alice twice");
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
 
     const runId = c.activeRunId();
     const row = clarificationRowsFor(c.store, c.sessionId, runId);
@@ -326,7 +326,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     ]);
 
     const res = await c.chat("list entries for Alice and Bob");
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
 
     const runId = c.activeRunId();
     const events = await c.readEvents(runId);

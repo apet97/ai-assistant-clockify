@@ -250,7 +250,7 @@ describe("project follow-up transcript", () => {
       .post("/api/chat/messages")
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -266,7 +266,7 @@ describe("project follow-up transcript", () => {
       .post(`/api/confirmations/${preview.previewId as string}/confirm`)
       .set("Cookie", cookie)
       .send({ nonce: preview.nonce });
-    expect(confirmPrivate.status).toBe(200);
+    expect(confirmPrivate.status, JSON.stringify(confirmPrivate.body)).toBe(200);
     preview = confirmPrivate.body.resume.results.find((result: { kind?: string }) => result.kind === "preview");
     expect(preview?.preview?.expectedChanges.join(" ")).toContain("Add 1 member");
 
@@ -274,7 +274,7 @@ describe("project follow-up transcript", () => {
       .post(`/api/confirmations/${preview.previewId as string}/confirm`)
       .set("Cookie", cookie)
       .send({ nonce: preview.nonce });
-    expect(confirmMembership.status).toBe(200);
+    expect(confirmMembership.status, JSON.stringify(confirmMembership.body)).toBe(200);
     preview = confirmMembership.body.resume.results.find((result: { kind?: string }) => result.kind === "preview");
     expect(preview, JSON.stringify(confirmMembership.body)).toBeDefined();
     expect(preview?.preview?.expectedChanges.join(" ")).toContain("15.00");
@@ -283,7 +283,7 @@ describe("project follow-up transcript", () => {
       .post(`/api/confirmations/${preview.previewId as string}/confirm`)
       .set("Cookie", cookie)
       .send({ nonce: preview.nonce });
-    expect(confirmRate.status).toBe(200);
+    expect(confirmRate.status, JSON.stringify(confirmRate.body)).toBe(200);
     expect(confirmRate.body.receipt).toMatchObject({ ok: true, action: "clockify_projects_rate_update" });
 
     const project = fake.state.projects.find((item) => item.name === PROJECT_NAME) as
@@ -307,7 +307,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "preview" }),
     ]));
@@ -322,7 +322,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -340,7 +340,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -364,7 +364,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -385,7 +385,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -406,7 +406,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -428,7 +428,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.reply.text).toContain("No change has been prepared");
     expect(followUp.body.reply.text).toContain("fresh message");
     expect(followUp.body.reply.text).not.toContain("Done");
@@ -446,7 +446,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: "receipt",
@@ -501,7 +501,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "preview" }),
     ]));
@@ -532,7 +532,7 @@ describe("project follow-up transcript", () => {
       .set("Cookie", cookie)
       .send({ requestId: randomUUID(), message: FOLLOW_UP });
 
-    expect(followUp.status).toBe(200);
+    expect(followUp.status, JSON.stringify(followUp.body)).toBe(200);
     expect(followUp.body.results).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "preview" }),
     ]));

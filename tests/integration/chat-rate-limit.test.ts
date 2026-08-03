@@ -63,23 +63,23 @@ describe("chat rate limit (per session)", () => {
 
     for (let i = 0; i < 2; i += 1) {
       const ok = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: `hi ${i}` });
-      expect(ok.status).toBe(200);
+      expect(ok.status, JSON.stringify(ok.body)).toBe(200);
     }
     const limited = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "again" });
-    expect(limited.status).toBe(429);
+    expect(limited.status, JSON.stringify(limited.body)).toBe(429);
     expect(limited.body).toMatchObject({ ok: false, code: "rate_limited" });
     expect(limited.body.message).toMatch(/too quickly/i);
     expect(Number(limited.headers["retry-after"])).toBeGreaterThan(0);
 
     // The stream route shares the same budget and rejects with JSON, not NDJSON.
     const stream = await request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "again" });
-    expect(stream.status).toBe(429);
+    expect(stream.status, JSON.stringify(stream.body)).toBe(429);
     expect(stream.headers["content-type"]).toContain("application/json");
 
     // Once the window slides, the same session may chat again.
     nowRef.value = new Date("2026-06-06T10:01:01.000Z");
     const recovered = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "later" });
-    expect(recovered.status).toBe(200);
+    expect(recovered.status, JSON.stringify(recovered.body)).toBe(200);
   });
 
   it("a second session on the same app has its own budget", async () => {
@@ -89,10 +89,11 @@ describe("chat rate limit (per session)", () => {
     for (let i = 0; i < 2; i += 1) {
       await request(app).post("/api/chat/messages").set("Cookie", first).send({ message: `hi ${i}` });
     }
-    expect((await request(app).post("/api/chat/messages").set("Cookie", first).send({ message: "x" })).status).toBe(429);
+    const limitedAfterSecondWindow = await request(app).post("/api/chat/messages").set("Cookie", first).send({ message: "x" });
+    expect(limitedAfterSecondWindow.status, JSON.stringify(limitedAfterSecondWindow.body)).toBe(429);
 
     const second = await mintCookie();
     const ok = await request(app).post("/api/chat/messages").set("Cookie", second).send({ message: "fresh" });
-    expect(ok.status).toBe(200);
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
   });
 });
