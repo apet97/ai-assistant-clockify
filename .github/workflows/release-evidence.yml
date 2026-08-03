@@ -202,7 +202,7 @@ jobs:
         run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
       - name: Upload release supply-chain evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-supply-chain-evidence-${{ github.run_id }}
           path: |
@@ -415,7 +415,7 @@ jobs:
         with:
           subject-path: /tmp/deepseek-live-release/*.json
       - name: Upload DeepSeek release validation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-deepseek-evidence-${{ github.run_id }}
           path: /tmp/deepseek-live-release/*.json
@@ -463,7 +463,7 @@ jobs:
           PRIVATE_PRODUCTION_VALIDATION_PATH: /tmp/private-production-release-validation.json
         run: npm run check:private-production-evidence
       - name: Upload private-production release validation and aggregate evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-private-production-evidence-${{ github.run_id }}
           path: |
@@ -515,7 +515,7 @@ jobs:
           LIVE_BROWSER_VALIDATION_PATH: /tmp/live-browser-acceptance-validation.json
         run: npm run check:live-browser-evidence
       - name: Upload production browser release validation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-live-browser-evidence-${{ github.run_id }}
           path: |
@@ -591,7 +591,7 @@ jobs:
           OPERATIONAL_VALIDATION_PATH: /tmp/operational-release-validation.json
         run: npm run check:operational-evidence
       - name: Upload operational release validation
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-operational-evidence-${{ github.run_id }}
           path: |
@@ -627,7 +627,7 @@ jobs:
           LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
       - name: Upload live-smoke evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-live-smoke-evidence-${{ github.run_id }}
           path: /tmp/ai-assistant-live-smoke-evidence/smoke.json
@@ -662,7 +662,7 @@ jobs:
           LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
       - name: Upload cleanup evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-live-smoke-cleanup-evidence-${{ github.run_id }}
           path: /tmp/ai-assistant-live-smoke-evidence/cleanup.json
@@ -827,7 +827,7 @@ jobs:
         run: npx tsx scripts/evidence/v2-authority-evidence.ts
       - name: Upload v2 authority evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-v2-authority-evidence-${{ github.run_id }}
           path: /tmp/ai-assistant-release-evidence/v2-authority-evidence.json
@@ -873,7 +873,7 @@ jobs:
           NODE
       - name: Upload release evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-evidence-${{ github.run_id }}
           path: /tmp/ai-assistant-release-evidence/release-evidence.json
