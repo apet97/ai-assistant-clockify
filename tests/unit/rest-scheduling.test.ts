@@ -57,7 +57,7 @@ describe("scheduling rest", () => {
     // The read-back exposes the period as a nested `period:{start,end}` object.
     // Per the OpenAPI spec the PATCH responds with an ARRAY of AssignmentDtoV1
     // (the updated occurrence(s)) — the id comes from its first element.
-    const f = vi.fn(async (_url: string, init: any) =>
+    const f = vi.fn(async (_url: string, init: RequestInit) =>
       init.method === "GET"
         ? jsonResponse([{ id: "a1", userId: "u1", projectId: "p1", period: { start: "2026-06-01", end: "2026-06-05" }, hoursPerDay: 8, startTime: "09:30" }])
         : jsonResponse([{ id: "a1-updated", userId: "u1" }]),
@@ -75,6 +75,29 @@ describe("scheduling rest", () => {
     expect(body.hoursPerDay).toBe(6); // changed
     expect(body.startTime).toBe("09:30"); // lossless full replacement
     expect(body.seriesUpdateOption).toBe("ALL");
+  });
+
+  it("omits nullable startTime and note values from the full replacement body", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse([{
+            id: "a1",
+            userId: "u1",
+            projectId: "p1",
+            period: { start: "2026-06-01", end: "2026-06-05" },
+            hoursPerDay: 8,
+            startTime: null,
+            note: null,
+          }])
+        : jsonResponse([{ id: "a1" }]),
+    );
+
+    await rest(f as unknown as typeof fetch).updateAssignment("a1", { hoursPerDay: 6 });
+    const updateCall = f.mock.calls.at(-1);
+    if (!updateCall || typeof updateCall[1].body !== "string") throw new Error("expected assignment update body");
+    const body = JSON.parse(updateCall[1].body) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("startTime");
+    expect(body).not.toHaveProperty("note");
   });
 
   it("deleteAssignment DELETEs with the seriesUpdateOption query", async () => {

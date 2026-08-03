@@ -107,6 +107,10 @@ export interface FakeWorkspaceSeed {
   approvals?: ApprovalSummary[];
   /** Per-project membership records (mirrors ProjectDtoV1.memberships). */
   projectMemberships?: Record<string, Array<Record<string, unknown>>>;
+  /** Stateful custom-field values keyed by project id then field id. */
+  projectCustomFieldValues?: Record<string, Record<string, unknown>>;
+  /** Stateful custom-field values keyed by time-entry id then field id. */
+  entryCustomFieldValues?: Record<string, Record<string, unknown>>;
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
   /** Per-family completeness controls (simulates a pagination/search backstop). */
@@ -151,6 +155,8 @@ export interface FakeState {
   assignments: AssignmentSummary[];
   approvals: ApprovalSummary[];
   projectMemberships: Record<string, Array<Record<string, unknown>>>;
+  projectCustomFieldValues: Record<string, Record<string, unknown>>;
+  entryCustomFieldValues: Record<string, Record<string, unknown>>;
   deleted: Array<{ entityType: string; id: string }>;
 }
 
@@ -212,6 +218,8 @@ export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
     assignments: source.assignments ?? [],
     approvals: source.approvals ?? [],
     projectMemberships: source.projectMemberships ?? {},
+    projectCustomFieldValues: structuredClone(source.projectCustomFieldValues ?? {}),
+    entryCustomFieldValues: structuredClone(source.entryCustomFieldValues ?? {}),
     deleted: [],
   };
 }

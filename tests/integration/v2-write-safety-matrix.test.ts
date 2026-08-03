@@ -174,10 +174,7 @@ describe("T17-D: the real observed matrix is the only input to authority evidenc
     const observations = realObservations.filter(
       (entry) => !(entry.actionName === catalogWriteNames()[0] && entry.invariant === "no_ambiguity_retry"),
     );
-    const report = buildWriteSafetyReport(observations);
-    expect(report.status).toBe("failed");
-    expect(report.failures.some((failure) => failure.failureCode === "invariant_not_observed")).toBe(true);
-    expect(authorityEvidenceFromReport(report).status).toBe(V2_AUTHORITY_NOT_EVALUATED_SENTINEL);
+    expect(() => buildWriteSafetyReport(observations)).toThrow(/missing_write_safety_observation/);
   });
 
   it("rejects a SENTINEL / blocked report", () => {
@@ -187,10 +184,7 @@ describe("T17-D: the real observed matrix is the only input to authority evidenc
   });
 
   it("rejects a ZERO-CASE report", () => {
-    const empty = buildWriteSafetyReport([]);
-    expect(empty.status).toBe("failed");
-    expect(empty.numerator).toBe(0);
-    expect(authorityEvidenceFromReport(empty).status).toBe(V2_AUTHORITY_NOT_EVALUATED_SENTINEL);
+    expect(() => buildWriteSafetyReport([])).toThrow(/missing_write_safety_observation/);
   });
 
   it("rejects a report bound to the WRONG candidate SHA", () => {

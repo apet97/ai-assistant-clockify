@@ -159,6 +159,7 @@ describe("custom field actions", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.setProjectCustomFieldValueAtomic).toBe(1);
+    expect(fake.state.projectCustomFieldValues.p1?.cf1).toBe("High");
   });
 
   it("clockify_custom_fields_set_value_entry previews high_risk_write then sets once", async () => {
@@ -173,5 +174,8 @@ describe("custom field actions", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.setEntryCustomFieldValueAtomic).toBe(1);
+    expect(fake.state.entryCustomFieldValues.e1?.cf1).toBe("High");
+    const mutationState = await fake.client.getEntryCustomFieldMutationState("e1");
+    expect(mutationState?.customFieldValues).toEqual([{ customFieldId: "cf1", value: "High" }]);
   });
 });

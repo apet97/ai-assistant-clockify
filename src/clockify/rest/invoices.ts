@@ -27,7 +27,7 @@ const EXPORT_MAX_BYTES = 1_000_000;
  * {@link INVOICE_PERCENT_FIELDS}; goclmcp copies the `*Percent` names from the
  * GET, which never exist there, and inherits the silent-zeroing bug.
  */
-const INVOICE_EDITABLE_FIELDS = [
+const INVOICE_STRING_FIELDS = [
   "clientId",
   "companyId",
   "currency",
@@ -38,9 +38,13 @@ const INVOICE_EDITABLE_FIELDS = [
   "note",
   "number",
   "subject",
-  "taxType",
-  "visibleZeroFields",
 ] as const;
+
+const INVOICE_NUMBER_FIELDS = ["discountPercent", "taxPercent", "tax2Percent"] as const;
+const INVOICE_REQUIRED_STRING_FIELDS = ["currency", "dueDate", "issuedDate", "number"] as const;
+const INVOICE_REQUIRED_NUMBER_FIELDS = ["discountPercent", "taxPercent", "tax2Percent"] as const;
+const TAX_TYPES = new Set(["COMPOUND", "SIMPLE", "NONE"]);
+const VISIBLE_ZERO_FIELDS = new Set(["TAX", "TAX_2", "DISCOUNT"]);
 
 /**
  * Tax/discount are asymmetric on the wire (live-probed 2026-06-10): the GET
@@ -181,14 +185,72 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
   ): Promise<Record<string, unknown>> {
     const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
     const body: Record<string, unknown> = {};
-    for (const key of INVOICE_EDITABLE_FIELDS) {
-      if (existing[key] !== undefined) body[key] = existing[key];
+    for (const key of INVOICE_STRING_FIELDS) {
+      if (typeof existing[key] === "string") body[key] = existing[key];
+    }
+    for (const key of INVOICE_NUMBER_FIELDS) {
+      if (typeof existing[key] === "number" && Number.isFinite(existing[key])) body[key] = existing[key];
     }
     for (const [getKey, putKey] of INVOICE_PERCENT_FIELDS) {
       const value = existing[getKey];
-      if (typeof value === "number") body[putKey] = value / 100;
+      if (typeof value === "number" && Number.isFinite(value)) body[putKey] = value / 100;
     }
-    Object.assign(body, patch);
+    if (typeof existing.taxType === "string" && TAX_TYPES.has(existing.taxType)) {
+      body.taxType = existing.taxType;
+    }
+    if (typeof existing.visibleZeroFields === "string" && VISIBLE_ZERO_FIELDS.has(existing.visibleZeroFields)) {
+      body.visibleZeroFields = existing.visibleZeroFields;
+    } else if (
+      Array.isArray(existing.visibleZeroFields)
+      && existing.visibleZeroFields.every((value): value is string => typeof value === "string" && VISIBLE_ZERO_FIELDS.has(value))
+      && new Set(existing.visibleZeroFields).size === existing.visibleZeroFields.length
+    ) {
+      body.visibleZeroFields = [...existing.visibleZeroFields];
+    }
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      if ((INVOICE_STRING_FIELDS as readonly string[]).includes(key)) {
+        if (typeof value !== "string") throw new Error(`invoice_update_invalid_${key}`);
+        body[key] = value;
+        continue;
+      }
+      if ((INVOICE_NUMBER_FIELDS as readonly string[]).includes(key)) {
+        if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`invoice_update_invalid_${key}`);
+        body[key] = value;
+        continue;
+      }
+      if (key === "taxType") {
+        if (typeof value !== "string" || !TAX_TYPES.has(value)) throw new Error("invoice_update_invalid_taxType");
+        body[key] = value;
+        continue;
+      }
+      if (key === "visibleZeroFields") {
+        if (typeof value === "string" && VISIBLE_ZERO_FIELDS.has(value)) {
+          body[key] = value;
+          continue;
+        }
+        if (
+          Array.isArray(value)
+          && value.every((item): item is string => typeof item === "string" && VISIBLE_ZERO_FIELDS.has(item))
+          && new Set(value).size === value.length
+        ) {
+          body[key] = [...value];
+          continue;
+        }
+        throw new Error("invoice_update_invalid_visibleZeroFields");
+      }
+      // The PUT schema is closed: never forward a read-only/computed or unknown key.
+    }
+    for (const key of INVOICE_REQUIRED_STRING_FIELDS) {
+      if (typeof body[key] !== "string" || body[key].length === 0) {
+        throw new Error(`invoice_update_missing_or_invalid_${key}`);
+      }
+    }
+    for (const key of INVOICE_REQUIRED_NUMBER_FIELDS) {
+      if (typeof body[key] !== "number" || !Number.isFinite(body[key])) {
+        throw new Error(`invoice_update_missing_or_invalid_${key}`);
+      }
+    }
     if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
     if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
     return body;

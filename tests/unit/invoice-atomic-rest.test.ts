@@ -97,7 +97,17 @@ describe("atomic invoice REST methods", () => {
   it("keeps atomic field/status writes mutation-only and compatibility methods binding-safe", async () => {
     const fetchImpl = vi.fn(async (_url: string, init: RequestInit) =>
       init.method === "GET"
-        ? json({ id: "inv1", number: "INV-1", clientId: "c1", currency: "USD" })
+        ? json({
+            id: "inv1",
+            number: "INV-1",
+            clientId: "c1",
+            currency: "USD",
+            issuedDate: "2026-06-06T00:00:00Z",
+            dueDate: "2026-07-06T00:00:00Z",
+            discount: 0,
+            tax: 0,
+            tax2: 0,
+          })
         : json({ id: "inv1", number: "INV-1" }),
     );
     const invoice = port(fetchImpl as unknown as typeof fetch);
@@ -113,6 +123,44 @@ describe("atomic invoice REST methods", () => {
     await expect(deleteInvoice("inv1")).resolves.toBeUndefined();
     await expect(addInvoiceItem("inv1", { itemType: "TIME" })).resolves.toBeUndefined();
     await expect(deleteInvoicePayment("inv1", "pay1")).resolves.toBeUndefined();
+  });
+
+  it("does not forward nullable GET fields into the closed invoice PUT schema", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) =>
+      init.method === "GET"
+        ? json({
+            id: "inv1",
+            clientId: "c1",
+            companyId: null,
+            currency: "GBP",
+            dueDate: "2026-07-06T00:00:00Z",
+            issuedDate: "2026-06-06T00:00:00Z",
+            billFrom: null,
+            clientAddress: null,
+            note: null,
+            number: "INV-1",
+            subject: null,
+            taxType: null,
+            visibleZeroFields: null,
+            discount: 0,
+            tax: 0,
+            tax2: 0,
+          })
+        : json({ id: "inv1", number: "INV-1" }),
+    );
+    const invoice = port(fetchImpl as unknown as typeof fetch);
+    const body = await invoice.prepareInvoiceFieldUpdate("inv1", {});
+
+    expect(body).toEqual({
+      clientId: "c1",
+      currency: "GBP",
+      dueDate: "2026-07-06T00:00:00Z",
+      issuedDate: "2026-06-06T00:00:00Z",
+      number: "INV-1",
+      discountPercent: 0,
+      taxPercent: 0,
+      tax2Percent: 0,
+    });
   });
 
   it("preserves every raw invoice item field and order", async () => {

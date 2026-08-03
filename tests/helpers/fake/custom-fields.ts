@@ -20,6 +20,27 @@ export function makeFakeCustomFields({ state, seed, bump, nextId }: FakeContext)
   | "getEntryCustomFieldMutationState"
   | "setEntryCustomFieldValueAtomic"
 > {
+  function requireProject(projectId: string): void {
+    if (!state.projects.some((project) => project.id === projectId)) throw new Error("project_not_found");
+  }
+
+  function requireEntry(entryId: string): void {
+    if (!state.timeEntries.some((entry) => entry.id === entryId)) throw new Error("entry_not_found");
+  }
+
+  function setProjectValue(projectId: string, fieldId: string, value: unknown): void {
+    requireProject(projectId);
+    state.projectCustomFieldValues[projectId] = {
+      ...(state.projectCustomFieldValues[projectId] ?? {}),
+      [fieldId]: structuredClone(value),
+    };
+  }
+
+  function setEntryValues(entryId: string, values: Record<string, unknown>): void {
+    requireEntry(entryId);
+    state.entryCustomFieldValues[entryId] = structuredClone(values);
+  }
+
   return {
     async listCustomFields() {
       bump("listCustomFields");
@@ -89,19 +110,18 @@ export function makeFakeCustomFields({ state, seed, bump, nextId }: FakeContext)
     },
     async setProjectCustomFieldValue(projectId, fieldId, value) {
       bump("setProjectCustomFieldValue");
-      void projectId;
-      void fieldId;
-      void value;
+      setProjectValue(projectId, fieldId, value);
     },
     async setProjectCustomFieldValueAtomic(projectId, fieldId, value) {
       bump("setProjectCustomFieldValueAtomic");
-      void projectId; void fieldId; void value;
+      setProjectValue(projectId, fieldId, value);
     },
     async setEntryCustomFieldValue(entryId, fieldId, value) {
       bump("setEntryCustomFieldValue");
-      void entryId;
-      void fieldId;
-      void value;
+      setEntryValues(entryId, {
+        ...(state.entryCustomFieldValues[entryId] ?? {}),
+        [fieldId]: value,
+      });
     },
     async prepareEntryCustomFieldValue(entryId, fieldId, value) {
       bump("prepareEntryCustomFieldValue");
@@ -109,17 +129,52 @@ export function makeFakeCustomFields({ state, seed, bump, nextId }: FakeContext)
       if (!entry) throw new Error("entry_not_found");
       const source = structuredClone(entry as unknown as Record<string, unknown>);
       const current = Array.isArray(source.customFieldValues) ? source.customFieldValues as Array<Record<string, unknown>> : [];
-      const without = current.filter((field) => (field.customFieldId ?? field.customFieldDefinitionId ?? field.id) !== fieldId);
-      return { source, body: { ...entry, start: entry.start, customFieldValues: [...without, { customFieldId: fieldId, value }] } };
+      const values = new Map<string, unknown>();
+      for (const field of current) {
+        const currentFieldId = field.customFieldId ?? field.customFieldDefinitionId ?? field.id;
+        if (typeof currentFieldId === "string") values.set(currentFieldId, field.value);
+      }
+      for (const [currentFieldId, currentValue] of Object.entries(state.entryCustomFieldValues[entryId] ?? {})) {
+        values.set(currentFieldId, currentValue);
+      }
+      values.set(fieldId, value);
+      return {
+        source,
+        body: {
+          ...entry,
+          start: entry.start,
+          customFieldValues: [...values.entries()].map(([customFieldId, currentValue]) => ({
+            customFieldId,
+            value: structuredClone(currentValue),
+          })),
+        },
+      };
     },
     async getEntryCustomFieldMutationState(entryId) {
       bump("getEntryCustomFieldMutationState");
       const entry = state.timeEntries.find((row) => row.id === entryId);
-      return entry ? structuredClone(entry as unknown as Record<string, unknown>) : null;
+      if (!entry) return null;
+      const output = structuredClone(entry as unknown as Record<string, unknown>);
+      const values = state.entryCustomFieldValues[entryId];
+      if (values && Object.keys(values).length > 0) {
+        output.customFieldValues = Object.entries(values).map(([customFieldId, value]) => ({
+          customFieldId,
+          value: structuredClone(value),
+        }));
+      }
+      return output;
     },
     async setEntryCustomFieldValueAtomic(entryId, prepared) {
       bump("setEntryCustomFieldValueAtomic");
-      void entryId; void prepared;
+      const values = prepared.body.customFieldValues;
+      if (!Array.isArray(values)) throw new Error("custom_field_values_missing");
+      const next: Record<string, unknown> = {};
+      for (const value of values) {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) continue;
+        const record = value as Record<string, unknown>;
+        if (typeof record.customFieldId === "string") next[record.customFieldId] = structuredClone(record.value);
+      }
+      setEntryValues(entryId, next);
     },
   };
 }

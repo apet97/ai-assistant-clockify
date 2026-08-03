@@ -75,5 +75,6 @@ describe("v2 custom field API actions", () => {
     if (preview.kind !== "preview") throw new Error("expected preview");
     await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(fake.counts.setProjectCustomFieldValueAtomic).toBe(1);
+    expect(fake.state.projectCustomFieldValues.p1?.cf1).toEqual(values);
   });
 });

@@ -26,16 +26,16 @@ type AssignmentRow = {
 
 function mapAssignment(raw: AssignmentRow): AssignmentSummary {
   const out: AssignmentSummary = { id: raw.id as string };
-  if (raw.userId !== undefined) out.userId = raw.userId;
-  if (raw.projectId !== undefined) out.projectId = raw.projectId;
+  if (typeof raw.userId === "string") out.userId = raw.userId;
+  if (typeof raw.projectId === "string") out.projectId = raw.projectId;
   // The period is exposed as a nested `period:{start,end}` (create accepts top-level).
   const start = raw.start ?? raw.period?.start;
   const end = raw.end ?? raw.period?.end;
-  if (start !== undefined) out.start = start;
-  if (end !== undefined) out.end = end;
+  if (typeof start === "string") out.start = start;
+  if (typeof end === "string") out.end = end;
   if (typeof raw.hoursPerDay === "number") out.hoursPerDay = raw.hoursPerDay;
-  if (raw.startTime !== undefined) out.startTime = raw.startTime;
-  if (raw.note !== undefined) out.note = raw.note;
+  if (typeof raw.startTime === "string") out.startTime = raw.startTime;
+  if (typeof raw.note === "string") out.note = raw.note;
   if (typeof raw.published === "boolean") out.published = raw.published;
   return out;
 }
@@ -82,8 +82,8 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
       start,
       end,
       hoursPerDay: patch.hoursPerDay ?? existing.hoursPerDay,
-      ...(existing.startTime !== undefined ? { startTime: existing.startTime } : {}),
-      ...(patch.note !== undefined ? { note: patch.note } : existing.note !== undefined ? { note: existing.note } : {}),
+      ...(typeof existing.startTime === "string" ? { startTime: existing.startTime } : {}),
+      ...(typeof patch.note === "string" ? { note: patch.note } : typeof existing.note === "string" ? { note: existing.note } : {}),
       ...(patch.seriesUpdateOption !== undefined ? { seriesUpdateOption: patch.seriesUpdateOption } : {}),
     };
   }

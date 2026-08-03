@@ -17,8 +17,13 @@ import {
   DISCOVERY_CORPUS_VERSION,
 } from "./api-discovery-cases.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
+import {
+  buildWriteSafetyEvalCases,
+  WRITE_SAFETY_INVARIANTS,
+} from "./write-safety-cases.js";
 
 export const MISSING_CREDENTIAL_STATUS = "not_evaluated_missing_credentials";
+export const WRITE_SAFETY_REPORT_KIND = "v2_write_safety";
 
 export type EvalReportStatus = "passed" | "failed" | typeof MISSING_CREDENTIAL_STATUS;
 
@@ -279,6 +284,50 @@ function cloneAttempt(attempt: EvalAttempt): EvalAttempt {
   };
 }
 
+function validAttemptShape(attempt: EvalAttempt): boolean {
+  return typeof attempt === "object"
+    && attempt !== null
+    && typeof attempt.caseId === "string"
+    && typeof attempt.cohort === "string"
+    && Number.isInteger(attempt.repeat)
+    && attempt.repeat >= 0
+    && typeof attempt.passed === "boolean"
+    && (attempt.failureCode === undefined || typeof attempt.failureCode === "string")
+    && (attempt.clarificationInsteadOfCall === undefined
+      || typeof attempt.clarificationInsteadOfCall === "boolean")
+    && (attempt.loadedUnrelatedDestructiveOperations === undefined
+      || (Array.isArray(attempt.loadedUnrelatedDestructiveOperations)
+        && attempt.loadedUnrelatedDestructiveOperations.every((name) => typeof name === "string")));
+}
+
+function writeSafetyArtifactIsReleasable(report: EvalReport): boolean {
+  if (!Array.isArray(report.caseIds) || !Array.isArray(report.attempts)) return false;
+  const expectedCaseIds = buildWriteSafetyEvalCases().map((entry) => entry.actionName).sort();
+  if (JSON.stringify([...report.caseIds].sort()) !== JSON.stringify(expectedCaseIds)) return false;
+  if (report.caseIds.length !== report.caseCount || report.attempts.length !== report.denominator) return false;
+  if (!report.attempts.every(validAttemptShape)) return false;
+
+  const expectedKeys = new Set(report.caseIds.flatMap((caseId) =>
+    WRITE_SAFETY_INVARIANTS.map((invariant) => `${caseId}\u0000${invariant}\u00000`),
+  ));
+  const actualKeys = report.attempts.map((attempt) => `${attempt.caseId}\u0000${attempt.cohort}\u0000${attempt.repeat}`);
+  if (actualKeys.length !== expectedKeys.size || new Set(actualKeys).size !== actualKeys.length) return false;
+  if (actualKeys.some((key) => !expectedKeys.has(key))) return false;
+  if (report.numerator !== report.attempts.filter((attempt) => attempt.passed).length) return false;
+  const expectedScoredCaseIds = [...new Set(report.caseIds)].sort();
+  if (JSON.stringify([...report.scoredCaseIds].sort()) !== JSON.stringify(expectedScoredCaseIds)) return false;
+  const expectedFailures = report.attempts
+    .filter((attempt) => !attempt.passed)
+    .map((attempt) => ({
+      caseId: attempt.caseId,
+      cohort: attempt.cohort,
+      repeat: attempt.repeat,
+      failureCode: attempt.failureCode ?? "unspecified_failure",
+    }));
+  if (JSON.stringify(report.failures) !== JSON.stringify(expectedFailures)) return false;
+  return JSON.stringify(report.cohorts) === JSON.stringify(cohortScores(report.attempts));
+}
+
 /**
  * Build a complete report. `caseIds` is the derived case set: its length is the
  * report's `caseCount`, and an attempt naming a case outside it is rejected
@@ -325,11 +374,11 @@ export function buildEvalReport(input: {
     cohorts: cohortScores(input.attempts),
     failures,
     scoredCaseIds: [...new Set(input.attempts.map((attempt) => attempt.caseId))].sort(),
-    ...(discovery
+    ...(discovery || input.kind === WRITE_SAFETY_REPORT_KIND
       ? {
           caseIds: [...input.caseIds],
           attempts: input.attempts.map(cloneAttempt),
-          thresholdViolations: thresholdViolations ?? [],
+          ...(discovery ? { thresholdViolations: thresholdViolations ?? [] } : {}),
         }
       : {}),
     ...(loadedDestructiveTelemetry
@@ -384,19 +433,7 @@ export function isReleasableReport(report: EvalReport): boolean {
   if (report.kind === API_DISCOVERY_REPORT_KIND) {
     if (!Array.isArray(report.caseIds) || !Array.isArray(report.attempts)) return false;
     if (report.caseIds.length !== report.caseCount || report.attempts.length !== report.denominator) return false;
-    if (!report.attempts.every((attempt) =>
-      typeof attempt === "object"
-      && attempt !== null
-      && typeof attempt.caseId === "string"
-      && typeof attempt.cohort === "string"
-      && typeof attempt.repeat === "number"
-      && typeof attempt.passed === "boolean"
-      && (attempt.failureCode === undefined || typeof attempt.failureCode === "string")
-      && (attempt.clarificationInsteadOfCall === undefined
-        || typeof attempt.clarificationInsteadOfCall === "boolean")
-      && (attempt.loadedUnrelatedDestructiveOperations === undefined
-        || (Array.isArray(attempt.loadedUnrelatedDestructiveOperations)
-          && attempt.loadedUnrelatedDestructiveOperations.every((name) => typeof name === "string"))))) return false;
+    if (!report.attempts.every(validAttemptShape)) return false;
     if (report.numerator !== report.attempts.filter((attempt) => attempt.passed).length) return false;
     const expectedScoredCaseIds = [...new Set(report.caseIds)].sort();
     if (JSON.stringify([...report.scoredCaseIds].sort()) !== JSON.stringify(expectedScoredCaseIds)) return false;
@@ -414,6 +451,9 @@ export function isReleasableReport(report: EvalReport): boolean {
     return recomputed.length === 0
       && Array.isArray(report.thresholdViolations)
       && report.thresholdViolations.length === 0;
+  }
+  if (report.kind === WRITE_SAFETY_REPORT_KIND) {
+    return writeSafetyArtifactIsReleasable(report);
   }
   return report.numerator === report.denominator && report.failures.length === 0;
 }
