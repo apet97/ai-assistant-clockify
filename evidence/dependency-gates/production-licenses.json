@@ -52,7 +52,7 @@
     },
     {
       "package": "body-parser",
-      "version": "1.20.5",
+      "version": "1.20.6",
       "license": "MIT",
       "status": "allowed"
     },
@@ -328,7 +328,7 @@
     },
     {
       "package": "ip-address",
-      "version": "10.2.0",
+      "version": "10.4.0",
       "license": "MIT",
       "status": "allowed"
     },
