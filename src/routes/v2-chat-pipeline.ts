@@ -21,6 +21,9 @@ import { createClarificationService } from "../services/clarification-service.js
 import type { Installation } from "../db/store.js";
 import { withRunScopedHostCallBudget } from "../clockify/request-governor.js";
 import { classifyLoggableError } from "../log-error-class.js";
+import { HISTORY_WINDOW_MESSAGES } from "./chat-constants.js";
+import { isTransientErrorMessage, sanitizeStoredReplyForModel } from "./history-sanitizer.js";
+import type { ModelMessage } from "../assistant/model-client.js";
 
 /**
  * Closure-plan PR 6 (F04): the ONE persisted run ledger governs every v2
@@ -58,6 +61,45 @@ function requestGovernorFor(
 }
 
 /**
+ * The bounded model-visible conversation window for a v2 turn.
+ *
+ * v2 shipped without one: the runner was handed `[system, currentRequest]` and
+ * nothing else, so each admin message started a run blind to every previous
+ * turn. In one observed session the assistant listed a time entry by id and
+ * then answered "UPDATE THE DESCRIPTION TO 'DESC'" with "doesn't specify which
+ * entity", and a following "both.." with "Could you clarify what you'd like me
+ * to do?".
+ *
+ * Deliberately the SAME contract v1's `buildModelHistory` established, because
+ * the hazards are identical: `HISTORY_WINDOW_MESSAGES`, system rows dropped,
+ * transient model-failure rows dropped so the model never re-reads its own
+ * "I'm unavailable" turn as conversational fact, and stored assistant replies
+ * rewritten by `sanitizeStoredReplyForModel` so the deterministic
+ * "review and click Confirm" boilerplate is not learned and parroted.
+ *
+ * The CURRENT message is not in this window: v2 persists the admin turn during
+ * settlement, after the run, so the newest stored row here is the previous turn.
+ */
+function buildV2ModelHistory(deps: AppDeps, sessionId: string, currentMessage?: string): ModelMessage[] {
+  const window = deps.store.getRecentMessages(sessionId, HISTORY_WINDOW_MESSAGES, true)
+    .filter((message) => message.role !== "system" && !isTransientErrorMessage(message))
+    .map((message) =>
+      message.role === "assistant"
+        ? { role: "assistant" as const, content: sanitizeStoredReplyForModel(message.content) }
+        : { role: "user" as const, content: message.content },
+    );
+  // MEASURED, not assumed: the admin turn is persisted BEFORE the run starts,
+  // so the newest row is the request being answered. `buildFreshMessages` adds
+  // it back as the final message, so leaving it here would send it twice — the
+  // first end-to-end assertion failed on exactly that.
+  const last = window[window.length - 1];
+  if (currentMessage !== undefined && last?.role === "user" && last.content === currentMessage) {
+    return window.slice(0, -1);
+  }
+  return window;
+}
+
+/**
  * The one place that assembles `runAssistantV2`'s full dependency set for a
  * given installation/scope. Used by the chat pipeline (starts/continues a turn)
  * and by the clarification-resolve route (resumes a suspended run) so both
@@ -68,6 +110,7 @@ export function buildV2RunnerDependencies(
   installation: Installation,
   scope: RunScope & { runId: string },
   signal?: AbortSignal,
+  currentMessage?: string,
 ): RunnerDependencies {
   // Closure-plan PR 8 (F07): the exact-generation recheck used after every
   // provider await, before each read dispatch, and before write preparation —
@@ -96,6 +139,7 @@ export function buildV2RunnerDependencies(
   });
   return {
     modelClient: deps.modelClient as NativeToolModelClient,
+    priorMessages: buildV2ModelHistory(deps, scope.sessionId, currentMessage),
     runStore: deps.store,
     eventService,
     eventViews,
@@ -197,6 +241,8 @@ export function createClarificationResolutionPort(deps: AppDeps) {
       };
       const runScope = { ...scope, runId: active.runId };
       const lastSequenceBefore = deps.store.getLastRunEventSequence(runScope);
+      // Option-resolve carries an optionId, not admin prose: there is no
+      // current message to de-duplicate out of the window.
       const runnerDeps = buildV2RunnerDependencies(deps, installation, runScope, input.signal);
       const clarificationService = createClarificationService({
         store: deps.store,
@@ -343,7 +389,7 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
           };
         }
         const lastSequenceBefore = deps.store.getLastRunEventSequence(continuationScope);
-        const runnerDeps = buildV2RunnerDependencies(deps, installation, continuationScope, signal);
+        const runnerDeps = buildV2RunnerDependencies(deps, installation, continuationScope, signal, message);
         const outcome = await runAssistantV2({
           runId: continuationRunId,
           scope,
@@ -494,7 +540,7 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
       // (only reachable once a real HTTP turn drove a fresh v2 run end to end,
       // which no test did before T14-E).
       const runId = randomUUID();
-      const runnerDeps = buildV2RunnerDependencies(deps, installation, { ...scope, runId }, signal);
+      const runnerDeps = buildV2RunnerDependencies(deps, installation, { ...scope, runId }, signal, message);
       const outcome = await runAssistantV2({
         runId,
         scope,

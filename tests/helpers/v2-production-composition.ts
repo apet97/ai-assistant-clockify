@@ -92,6 +92,9 @@ export interface V2Composition {
   setClock: (value: Date) => void;
   /** Number of provider (model) completions requested so far. */
   providerCalls: () => number;
+  /** The exact messages sent to the provider on a given completion (0-based),
+   * for asserting what the model could actually SEE. */
+  providerMessages: (call: number) => Array<{ role: string; content: string }>;
   /** Total Clockify PORT calls (reads + writes) the fake observed. */
   clockifyCalls: () => number;
   /** Clockify MUTATION calls only — must stay 0 until a preview is confirmed. */
@@ -264,6 +267,11 @@ export async function composeV2ProductionApp(
       clock = value;
     },
     providerCalls: () => model.calls.length,
+    providerMessages: (call) =>
+      (model.calls[call]?.messages ?? []).map((m) => ({
+        role: String(m.role),
+        content: typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? ""),
+      })),
     clockifyCalls: () =>
       Object.values(workspace.counts).reduce((total, count) => total + count, 0),
     clockifyMutations: () =>

@@ -26,7 +26,7 @@ import type { RunState } from "../assistant-v2/state.js";
 export type RunServiceDeps = Pick<
   RunnerDependencies,
   "modelClient" | "eventService" | "runStore" | "clock"
->;
+> & Pick<RunnerDependencies, "priorMessages">;
 
 /** The scoped identity every store/event call keys on — never a bare runId. */
 export function scopedRun(state: RunState): RunScope & { runId: string } {
@@ -128,6 +128,21 @@ export function createRunService(deps: RunServiceDeps) {
   /** A run's model input is always rebuilt fresh — never a persisted provider
    * transcript. Resume summaries and the admin's clarification follow-up are
    * surfaced only on the first model call of a resumed invocation. */
+  /**
+   * v2 shipped with NO conversation history: this returned exactly
+   * `[system, currentRequest]`, so every admin message started a run that knew
+   * nothing about any previous turn. In one observed session the assistant
+   * listed a single time entry by id, and the very next message — "UPDATE THE
+   * DESCRIPTION TO 'DESC'" — was answered with "doesn't specify which entity";
+   * a following "both.." got "Could you clarify what you'd like me to do?".
+   * Neither is a model failure. It was never shown the turn it was continuing.
+   *
+   * `priorMessages` is the bounded, already-sanitized window (the caller owns
+   * the window size, the transient-error filter, and the stored-reply rewrite,
+   * exactly as v1's `buildModelHistory` does). It sits between the system
+   * prompt and the current request so the request stays LAST and is
+   * unambiguously the thing being answered.
+   */
   function buildFreshMessages(state: RunState, resumeSummaries: string[] = [], adminFollowUp?: string): ModelMessage[] {
     const userContent = resumeSummaries.length > 0 || adminFollowUp
       ? buildResumeUserMessage({
@@ -138,6 +153,7 @@ export function createRunService(deps: RunServiceDeps) {
       : state.originalRequest;
     return [
       { role: "system", content: buildV2SystemPrompt() },
+      ...(deps.priorMessages ?? []),
       { role: "user", content: userContent },
     ];
   }

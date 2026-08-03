@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModelClient, ToolCall } from "../assistant/model-client.js";
+import type { ModelClient, ModelMessage, ToolCall } from "../assistant/model-client.js";
 import type { RunBudgetOverrides } from "./budgets.js";
 import type {
   ApiSearchResult,
@@ -220,6 +220,14 @@ export interface RunEventServicePort {
 
 export interface RunnerDependencies {
   modelClient: NativeToolModelClient;
+  /**
+   * The bounded, already-sanitized model-visible conversation window for this
+   * turn — v1's `HISTORY_WINDOW_MESSAGES` equivalent. Absent on the first turn
+   * of a session. The runner never derives it: windowing, transient-error
+   * filtering, and the stored-reply rewrite belong to the transport that owns
+   * the transcript.
+   */
+  priorMessages?: ModelMessage[];
   runStore: RunStateStore;
   eventService: RunEventServicePort;
   eventViews: RunEventViewPort;
