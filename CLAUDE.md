@@ -408,7 +408,9 @@ bug was found against the REAL API, not by reading the code.
   evidence for 21 reporting/administration definitions); `workflows/invoices.ts`,
   `expenses.ts`, `custom-fields.ts`, `users.ts`, `time-off.ts`, `approvals.ts`,
   `scheduling.ts`, `admin.ts`, and `curated.ts` own the remaining T04-E through
-  T04-J evidence, completing all 140 definitions, `permissions.ts`,
+  T04-J evidence, completing (at the time of that task) all 140 definitions —
+  the catalog has since grown to 171 typed actions (127 exposed to v2; see
+  "Coverage" above) — `permissions.ts`,
   `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`

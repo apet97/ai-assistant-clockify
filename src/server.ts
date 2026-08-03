@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import express, { type Express } from "express";
@@ -49,6 +50,26 @@ import { buildApiOperationIndex } from "./assistant-v2/discovery/api-index.js";
 import { MODEL_API_ACTION_CATALOG } from "./harness/api-catalog.js";
 
 /**
+ * The ONE source of truth for the human-readable product version reported by
+ * /version: package.json's `version`. Never duplicate this as a literal
+ * elsewhere — a bump here must be the only edit required for /version to
+ * follow. Read from process.cwd() (not a file-relative URL): both `npm start`
+ * and the test runner always launch from the repository root, and the source
+ * tree (src/server.ts) and the built tree (dist/server/server.js) sit at
+ * different depths relative to this file, so a file-relative path would need
+ * to differ by layout. cwd does not.
+ */
+function readPackageProductVersion(): string {
+  const raw = readFileSync(resolve(process.cwd(), "package.json"), "utf8");
+  const parsed: unknown = JSON.parse(raw);
+  const version = (parsed as { version?: unknown }).version;
+  if (typeof version !== "string" || version.length === 0) {
+    throw new Error("package.json does not declare a product version");
+  }
+  return version;
+}
+
+/**
  * Compose the Express app from injected dependencies (server-as-a-function, so
  * tests drive it via Supertest with fakes). server.start() builds the real
  * dependencies from config and listens.
@@ -62,6 +83,7 @@ export function createApp(
     ...deps,
     apiOperationIndex,
     mutationCoordinator: deps.mutationCoordinator ?? createWorkspaceMutationCoordinator(),
+    productVersion: deps.productVersion ?? readPackageProductVersion(),
   };
   const app = express();
   // Express identifies itself by default. The service has no need to disclose
@@ -118,7 +140,7 @@ export function createApp(
   app.get("/version", (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json({
-      version: "2.0.0",
+      version: runtimeDeps.productVersion,
       releaseSha: runtimeDeps.releaseArtifactIdentity?.releaseSha ?? null,
       buildHash: runtimeDeps.releaseArtifactIdentity?.releaseBuildHash ?? null,
       serverArtifactSha256: runtimeDeps.releaseArtifactIdentity?.serverArtifactSha256 ?? null,

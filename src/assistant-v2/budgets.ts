@@ -49,6 +49,22 @@ export function resolveHostCallCeiling(overrides: RunBudgetOverrides | undefined
 
 export type TokenBudgetFailure = "token_budget_exhausted";
 
+/**
+ * Thrown when `preflightModelRequest` refuses a call. TYPED, because the runner
+ * must tell this apart from a real provider fault: preflight fires BEFORE any
+ * fetch, so reporting `model_failed` ("I could not reach the assistant model")
+ * describes a call that never happened. The public reason is the existing
+ * `budget_exhausted`; this class carries no message an admin ever sees.
+ */
+export class TokenBudgetExhaustedError extends Error {
+  readonly code: TokenBudgetFailure = "token_budget_exhausted";
+
+  constructor() {
+    super("token_budget_exhausted");
+    this.name = "TokenBudgetExhaustedError";
+  }
+}
+
 export interface ModelPreflightSuccess {
   ok: true;
   maxOutputTokens: number;

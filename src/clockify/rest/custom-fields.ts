@@ -110,7 +110,7 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
       source: structuredClone(entry as Record<string, unknown>),
       body: {
         start,
-        ...(entry.timeInterval?.end !== undefined ? { end: entry.timeInterval.end } : {}),
+        ...(entry.timeInterval?.end != null ? { end: entry.timeInterval.end } : {}),
         ...(entry.description !== undefined ? { description: entry.description } : {}),
         ...(entry.projectId !== undefined ? { projectId: entry.projectId } : {}),
         ...(entry.taskId !== undefined ? { taskId: entry.taskId } : {}),

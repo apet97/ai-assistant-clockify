@@ -37,6 +37,11 @@ export interface AppDeps {
   enforceIntentCapabilitiesInTests?: true;
   /** Immutable trusted API discovery index built once at startup from MODEL_API. */
   apiOperationIndex?: ApiOperationIndex;
+  /** Human-readable product version reported by /version. The ONE source of
+   * truth is package.json's `version`; createApp reads it when omitted so
+   * every caller (production start() and tests) sees the same value unless a
+   * test deliberately overrides it. Never a literal duplicated elsewhere. */
+  productVersion?: string;
 }
 
 const SESSION_COOKIE = "ai_assistant_session";
@@ -49,7 +54,20 @@ function parseCookies(header: string | undefined): Record<string, string> {
     if (index === -1) continue;
     const name = part.slice(0, index).trim();
     const value = part.slice(index + 1).trim();
-    if (name) out[name] = decodeURIComponent(value);
+    // `decodeURIComponent` THROWS on a malformed escape (`%zz`), and a cookie
+    // header is third-party input: any other app on the domain can set one.
+    // A bare call turned that into an uncaught parser exception and a generic
+    // 500 before any auth decision — for requests whose OWN session cookie was
+    // perfectly valid. Skip only the offending pair, keep the rest.
+    if (!name) continue;
+    try {
+      out[name] = decodeURIComponent(value);
+    } catch {
+      // A value that is not valid percent-encoding cannot be a cookie this app
+      // issued, so dropping it lands on the ordinary absent/invalid-session
+      // path rather than failing the request.
+      continue;
+    }
   }
   return out;
 }

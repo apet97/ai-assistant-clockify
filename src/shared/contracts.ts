@@ -44,7 +44,22 @@ export interface ArtifactDescriptor {
 export type ChatEvent<TResult = unknown, TReceipt = unknown> =
   | { type: "result"; result: TResult; persistenceDegraded?: boolean }
   | { type: "receipt"; receipt: TReceipt; undo?: { id: string }; persistenceDegraded?: boolean }
-  | { type: "reply"; text: string; kind?: string }
+  | {
+      type: "reply";
+      text: string;
+      kind?: string;
+      /**
+       * Structured per-item batch outcome (T13). `text` stays human-readable
+       * prose; this carries the same counts/ids the non-stream JSON response
+       * exposes so nothing is lost by making `text` readable.
+       */
+      batch?: {
+        batchId: string;
+        status: string;
+        items: Array<{ confirmationId: string; status: string; replayed: boolean }>;
+        persistenceDegraded?: boolean;
+      };
+    }
   | { type: "error"; message: string; code?: string }
   | { type: "status"; label: string; action?: string }
   | RunEventFrame

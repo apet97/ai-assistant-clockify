@@ -12,6 +12,42 @@ import type { RequireSession, WrappedHandler } from "./route-ports.js";
  * transactional ownership claim. Decode, authorize, one service call,
  * encode/stream — nothing else.
  */
+/**
+ * Deterministic, server-authored prose for a settled batch (T13). Never
+ * interpolates admin-authored text, a raw error message, or a Clockify id —
+ * only counts derived from the typed per-item status enum. The full
+ * per-item detail (ids included) travels in the sibling `batch` field, not
+ * in this text.
+ */
+function summarizeBatchOutcome(
+  status: string,
+  items: Array<{ status: string; replayed: boolean }>,
+): string {
+  const total = items.length;
+  const succeeded = items.filter((item) => item.status === "succeeded").length;
+  const partial = items.filter((item) => item.status === "partial").length;
+  const failed = items.filter(
+    (item) => item.status === "definitive_failed" || item.status === "outcome_unknown",
+  ).length;
+  const replayedCount = items.filter((item) => item.replayed).length;
+
+  const parts: string[] = [];
+  if (succeeded > 0) parts.push(`${succeeded} succeeded`);
+  if (partial > 0) parts.push(`${partial} partial`);
+  if (failed > 0) parts.push(`${failed} failed`);
+
+  const detail = parts.length > 0 ? parts.join(", ") : `${total} item${total === 1 ? "" : "s"}`;
+  const replayNote = replayedCount > 0 ? ` (${replayedCount} already settled from an earlier request)` : "";
+
+  if (status === "succeeded") {
+    return `Batch confirmed: ${detail}.${replayNote}`;
+  }
+  if (status === "partial") {
+    return `Batch partially completed: ${detail}. Review the results below.${replayNote}`;
+  }
+  return `Batch confirmation ended with status "${status}": ${detail}.${replayNote}`;
+}
+
 export function confirmationBatchesRouter(options: {
   requireSession: RequireSession;
   confirmationService: Pick<ConfirmationService, "confirmBatch" | "cancelBatch">;
@@ -83,19 +119,21 @@ export function confirmationBatchesRouter(options: {
         if (!committed.ok) {
           write({ type: "error", code: committed.body.code, message: committed.body.message });
         } else {
+          const batchItems = committed.items.map((item) => ({
+            confirmationId: item.confirmationId,
+            status: item.status,
+            replayed: item.replayed ?? false,
+          }));
           write({
             type: "reply",
             kind: committed.status,
-            text: JSON.stringify({
+            text: summarizeBatchOutcome(committed.status, batchItems),
+            batch: {
               batchId: committed.batchId,
               status: committed.status,
-              items: committed.items.map((item) => ({
-                confirmationId: item.confirmationId,
-                status: item.status,
-                replayed: item.replayed ?? false,
-              })),
+              items: batchItems,
               ...(committed.persistenceDegraded ? { persistenceDegraded: true } : {}),
-            }),
+            },
           });
         }
       } catch {

@@ -118,7 +118,8 @@ stays a thin, replaceable translator:
   item type) are shown *in the preview*, so a surprising outcome never happens after
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
-  reaches for instead of scrambling across the 140-action catalog.
+  reaches for instead of scrambling across the 171-action catalog (127 of which
+  are v2 API-exposed; verify with `npx tsx -e 'import("./src/harness/catalog.ts").then(m=>console.log(m.ACTION_CATALOG.length))'`).
 - **Operational metrics** (`GET /api/metrics`, including per-turn token/latency
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
   `scripts/eval-agentic.ts`) that score planner accuracy, write safety, latency,

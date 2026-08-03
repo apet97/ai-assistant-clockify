@@ -118,6 +118,34 @@ export {
  * data and model output cannot inject markup.
  */
 
+/**
+ * T14: on a genuine first run the permissions gate (`openPermissions(true, …)`)
+ * is the ONLY thing that renders — history replay and the chat-history dropdown
+ * never happen (there's no prior chat to restore and no session list to show).
+ * Firing `getHistory`/`listSessions` before the permissions gate resolves was
+ * pure waste on the critical path: the responses are fetched, then simply
+ * discarded because `restoreHistory`/`renderChat(sessionsRequest)` are only
+ * reachable from the `!firstRun` branch. This helper fetches permissions
+ * FIRST, and only starts the history/session-list requests once the gate has
+ * passed — a returning user (`firstRun: false`) still gets both requests
+ * started immediately alongside each other, exactly as before.
+ */
+export async function loadInitialData(
+  api: Pick<ChatApi, "getPermissions" | "getHistory" | "listSessions">,
+): Promise<{
+  perms: PermissionsResponse;
+  historyRequest?: Promise<HistoryResponse & { ok: true }>;
+  sessionsRequest?: Promise<SessionsResponse>;
+}> {
+  const perms = await api.getPermissions();
+  if (perms.firstRun) return { perms };
+  const historyRequest = api.getHistory();
+  const sessionsRequest = api.listSessions();
+  void historyRequest.catch(() => {});
+  void sessionsRequest.catch(() => {});
+  return { perms, historyRequest, sessionsRequest };
+}
+
 export function createController(api: ChatApi): ChatController {
   return {
     send: (message) => api.sendMessage(message),
@@ -799,15 +827,15 @@ function mount(root: HTMLElement, api: ChatApi): void {
 
   async function init(): Promise<void> {
     try {
-      // Permissions, history, and the chat-menu request are independent. Start
-      // them together, then keep the restore gate closed until the ordered
-      // history replay completes so a fast typed message never jumps ahead.
-      const permissionsRequest = api.getPermissions();
-      const historyRequest = api.getHistory();
-      const sessionsRequest = api.listSessions();
+      // `getMe` is independent of the permissions gate (display preferences
+      // apply either way), so it still starts immediately. History and the
+      // chat-menu request are NOT independent of first-run: on a genuine first
+      // run neither is ever consumed (see `loadInitialData`), so they wait for
+      // the permissions gate before starting — no waste on the critical path.
+      // Once started (returning-user path), keep the restore gate closed until
+      // the ordered history replay completes so a fast typed message never
+      // jumps ahead.
       const meRequest = api.getMe?.();
-      void historyRequest.catch(() => {});
-      void sessionsRequest.catch(() => {});
       void meRequest?.then((value) => {
         preferences = normalizeUiPreferences(value.preferences);
         saveUiPreferences(window.localStorage, preferences);
@@ -821,7 +849,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
       }).catch((error: unknown) => {
         showError(error instanceof ApiError ? error.message : "Could not load this session.");
       });
-      const perms = await permissionsRequest;
+      const { perms, historyRequest, sessionsRequest } = await loadInitialData(api);
       activePolicy = perms.policy;
       if (perms.firstRun) await openPermissions(true, perms);
       else {

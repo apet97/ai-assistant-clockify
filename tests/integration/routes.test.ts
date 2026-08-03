@@ -13,8 +13,19 @@ import type { Express } from "express";
 import { mintAdminCookie, requireSessionCookie, requireSessionSetCookie } from "../helpers/session.js";
 import { createChatPipeline, type ChatPipeline } from "../../src/routes/chat-pipeline.js";
 import type { AppDeps } from "../../src/routes/deps.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const ADDON_KEY = "ai-assistant";
+
+// The reported /version product version must come from the ONE source of
+// truth (package.json), not a literal duplicated in src/server.ts. Reading
+// it here independently means this test fails the moment the two drift.
+const packageJsonVersion = (
+  JSON.parse(
+    readFileSync(fileURLToPath(new URL("../../package.json", import.meta.url)), "utf8"),
+  ) as { version: string }
+).version;
 
 let keys: { privateKey: unknown; pem: string };
 let store: Store;
@@ -204,7 +215,7 @@ describe("routes", () => {
     expect(res.status).toBe(200);
     expect(res.headers["cache-control"]).toContain("no-store");
     expect(res.body).toEqual({
-      version: "2.0.0",
+      version: packageJsonVersion,
       releaseSha: "a".repeat(40),
       buildHash: "b".repeat(64),
       serverArtifactSha256: "c".repeat(64),
@@ -222,6 +233,27 @@ describe("routes", () => {
         thinkingMode: null,
       },
     });
+  });
+
+  it("GET /version reports the injected product version, not a literal", async () => {
+    // Proves the reported version is NOT a hardcoded string in server.ts: an
+    // app built with a distinct injected productVersion must echo it. If the
+    // route special-cased a literal (e.g. "2.0.0"), this would fail even
+    // though the injected value differs from package.json's current version.
+    const overrideApp = createApp({
+      config: makeTestConfig({
+        clockifyAddonPublicKeyPem: keys.pem,
+        clockifyAddonKey: ADDON_KEY,
+      }),
+      store,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => fake.client,
+      productVersion: "9.9.9-test-override",
+    });
+    const res = await request(overrideApp).get("/version");
+    expect(res.status).toBe(200);
+    expect(res.body.version).toBe("9.9.9-test-override");
   });
 
   it("GET /icon.svg serves the sidebar icon", async () => {
@@ -279,6 +311,47 @@ describe("routes", () => {
       support: "https://example.com/support",
       security: "https://example.com/security",
     });
+  });
+
+  /**
+   * `parseCookies` called bare `decodeURIComponent(value)`, which THROWS on a
+   * malformed escape. Any request carrying an unrelated cookie with a bad
+   * escape — set by any other app on the domain — became an uncaught parser
+   * exception and a generic 500, before any auth decision was made.
+   *
+   * A cookie header is attacker/third-party influenced input. It must fail
+   * closed to the ordinary unauthenticated path, and one bad pair must not
+   * discard the pairs around it.
+   */
+  it("survives a malformed escape in an UNRELATED cookie", async () => {
+    const response = await request(app).get("/api/me").set("Cookie", "other=%zz");
+    expect(response.status).not.toBe(500);
+    expect(response.status).toBe(401);
+  });
+
+  it("keeps a valid session usable alongside a malformed cookie", async () => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+    });
+    const component = await request(app).get("/component/assistant").query({ auth_token: token });
+    const cookie = requireSessionCookie(component.headers);
+
+    const response = await request(app).get("/api/me").set("Cookie", `other=%zz; ${cookie}; another=%E0%A4%A`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.preferences).toBeDefined();
+  });
+
+  it("treats a malformed SESSION cookie as unauthenticated, not a crash", async () => {
+    const response = await request(app).get("/api/me").set("Cookie", "ai_assistant_session=%zz");
+    expect(response.status).toBe(401);
+  });
+
+  it("still decodes ordinary percent-encoded cookie values", async () => {
+    const response = await request(app).get("/api/me").set("Cookie", "other=a%20b");
+    expect(response.status).toBe(401);
   });
 
   it.each(["/privacy", "/terms", "/support", "/security"])("serves a customer-facing public document at %s", async (path) => {

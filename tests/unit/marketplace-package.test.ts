@@ -41,8 +41,20 @@ describe("product version contract", () => {
     // assertions in the next test agree with the live ones for the wrong reason.
     expect(VERSION).not.toBe("1.0.0");
 
-    // The deployed release-identity endpoint.
-    expect(one(server, /^\s*version: "([^"]+)",$/mu, "the /version literal")).toBe(VERSION);
+    // The deployed release-identity endpoint no longer RESTATES the version: it
+    // derives it from package.json, so a bump cannot drift out of agreement
+    // instead of merely being asserted to agree. Both halves are checked, so
+    // this cannot pass vacuously: the literal must be gone AND the single
+    // derivation must be present.
+    expect(
+      [...server.matchAll(/^\s*version: "\d+\.\d+\.\d+",$/gmu)],
+      "server.ts must not restate the product version as a literal",
+    ).toHaveLength(0);
+    one(
+      server,
+      /deps\.productVersion \?\? (readPackageProductVersion)\(\)/mu,
+      "the product-version derivation",
+    );
 
     // The paste-ready listing.
     expect(one(listing, /^# Marketplace listing package - version (.+)$/mu, "listing title")).toBe(VERSION);

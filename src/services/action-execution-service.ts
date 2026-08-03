@@ -17,7 +17,7 @@ import { boundedDenialCode, type RunObservation } from "../assistant-v2/observat
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { scopedRun } from "./run-service.js";
 import { classifyLoggableError } from "../log-error-class.js";
-import { asTerminalReason } from "../assistant-v2/terminal-reason.js";
+import { asTerminalReason, InstallationChangedError } from "../assistant-v2/terminal-reason.js";
 
 /**
  * ActionExecutionService (T16-C): validated tool-call execution extracted from
@@ -150,13 +150,17 @@ export async function executeReadsConcurrently(
             // The diagnosis goes to the operator log as a bounded classification.
             //
             // PARSE rather than flatten. `requestGovernor.runRead` signals a revoked
-            // installation by throwing `Error("installation_changed")`
-            // (`routes/v2-chat-pipeline.ts:49`), and the generation recheck at
-            // `runner.ts:200` runs BEFORE this batch — so a revocation during the
-            // reads arrives here. Collapsing every throw to `read_dispatch_failed`
-            // would tell that admin to "try again in a moment" when only a reload
-            // helps. A known reason survives; anything else becomes `internal_error`.
-            code: asTerminalReason(error instanceof Error ? error.message : "read_dispatch_failed"),
+            // installation (`routes/v2-chat-pipeline.ts:49`) — ideally via the typed
+            // `InstallationChangedError` (T12), checked first below — and the
+            // generation recheck at `runner.ts:200` runs BEFORE this batch, so a
+            // revocation during the reads arrives here. Collapsing every throw to
+            // `read_dispatch_failed` would tell that admin to "try again in a
+            // moment" when only a reload helps. A known reason survives (either via
+            // the typed instanceof check or the legacy message-string recognizer);
+            // anything else becomes `internal_error`.
+            code: error instanceof InstallationChangedError
+              ? error.code
+              : asTerminalReason(error instanceof Error ? error.message : "read_dispatch_failed"),
           },
         };
       }

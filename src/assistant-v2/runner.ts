@@ -20,6 +20,7 @@ import {
 import { toolsForV2LoadedSet } from "../harness/tools.js";
 import { formatObservations, summarizeActionResultForModel, type RunObservation } from "./observations.js";
 import { createRunService, scopedRun } from "../services/run-service.js";
+import { TokenBudgetExhaustedError } from "./budgets.js";
 import {
   createApiDiscoveryService,
   seedCacheFromPriorRun,
@@ -189,6 +190,12 @@ export async function runAssistantV2(
     } catch (error) {
       if (error instanceof ProviderProtocolError) {
         return runs.failRun(state, error.reason);
+      }
+      // Preflight refused BEFORE any fetch, so this is not a provider fault.
+      // Falling through to `model_failed` told the admin "I could not reach the
+      // assistant model" about a call that was never made.
+      if (error instanceof TokenBudgetExhaustedError) {
+        return runs.failRun(state, "budget_exhausted");
       }
       // The caught message is NOT a terminal reason. It reaches the admin's screen and
       // the API `code` field, and 75a87a8 proved this class of message carries

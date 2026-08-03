@@ -451,12 +451,6 @@ export interface Store {
     state: import("../assistant-v2/state.js").RunState,
     payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.failed"],
   ): import("../assistant-v2/events.js").SequencedRunEvent;
-  getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
-    runId: string;
-    phase: import("../assistant-v2/state.js").RunPhase;
-    lastSequence: number;
-    updatedAt: string;
-  } | undefined;
   createIntentCapability(input: CreateIntentCapabilityInput): IntentCapabilityRecord;
   getIntentCapability(id: string, scope: IntentCapabilityScope): IntentCapabilityRecord | undefined;
   getIntentCapabilityForOperation(input: IntentCapabilityOperationScope): IntentCapabilityRecord;
@@ -696,7 +690,6 @@ export interface Store {
   advanceConfirmationBatchProgress(batchId: string, nextIndex: number, timestamp: string): boolean;
   cancelUndispatchedBatchItems(batchId: string, fromIndex: number, timestamp: string): number;
   recoverConfirmationBatch(batchId: string, nowIsoArg: string): void;
-  expireConfirmationBatches(nowIso: string): number;
 
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
   recordIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
@@ -856,6 +849,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const undoStore = buildUndoStore(ctx);
   const operationRunStore = buildOperationRunStore(ctx);
   const runEventStore = buildRunEventStore(ctx);
+  const assistantRunStore = buildAssistantRunStore(ctx);
   const pendingClarificationStore = buildPendingClarificationStore(ctx);
   const messageStore = buildMessageStore(ctx);
   const assistantWritePreparationStore = buildAssistantWritePreparationStore(ctx, {
@@ -1291,8 +1285,56 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
-    ...buildAssistantRunStore(ctx),
+    ...assistantRunStore,
     ...runEventStore,
+    /**
+     * Terminalize a session's active run WITH its `run.failed` event.
+     *
+     * The runs-store implementation discarded `code` (`void code;`) and flipped
+     * `phase` with raw SQL, so a stranded run ended silently: no bounded reason
+     * in the durable journal, and operator health could not tell a lapsed
+     * confirmation from a missing clarification. This overrides that with the
+     * same eventful path every other terminal transition uses, keyed on the
+     * exact run identity (installation generation and auth class included).
+     *
+     * A row whose state cannot be reconstructed still gets terminalized by the
+     * underlying update — never left active — but that is the last resort, not
+     * the normal path.
+     */
+    failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string) {
+      const rows = ctx.db.prepare(
+        `SELECT run_id, installation_generation, auth_class FROM assistant_runs
+          WHERE session_id = ? AND workspace_id = ? AND admin_user_id = ?
+            AND phase NOT IN ('completed', 'failed')`,
+      ).all(sessionId, workspaceId, adminUserId) as Array<{
+        run_id: string;
+        installation_generation: number;
+        auth_class: string;
+      }>;
+      let failed = 0;
+      let unreconstructable = false;
+      for (const row of rows) {
+        const scope = {
+          sessionId,
+          workspaceId,
+          adminUserId,
+          runId: row.run_id,
+          installationGeneration: row.installation_generation,
+          authClass: row.auth_class as "addon" | "api_key",
+        };
+        const state = assistantRunStore.getRun(scope);
+        if (!state) {
+          unreconstructable = true;
+          continue;
+        }
+        runEventStore.failRunWithEvent(scope, state, { code });
+        failed += 1;
+      }
+      if (unreconstructable) {
+        failed += assistantRunStore.failActiveRunsForSession(sessionId, workspaceId, adminUserId, code);
+      }
+      return failed;
+    },
     listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput) {
       return runEventStore.listEvents(input);
     },

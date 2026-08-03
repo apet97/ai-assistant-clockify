@@ -11,7 +11,7 @@ import {
   type RunScope,
 } from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
-import { asTerminalReason, copyFor } from "../assistant-v2/terminal-reason.js";
+import { InstallationChangedError, asTerminalReason, copyFor } from "../assistant-v2/terminal-reason.js";
 import { deterministicGuardReply } from "./chat-guards.js";
 import { WorkspaceMutationRevokedError } from "../clockify/workspace-mutation-coordinator.js";
 import { createRunEventService } from "../services/run-event-service.js";
@@ -50,7 +50,7 @@ function requestGovernorFor(
       // F07: the generation is rechecked immediately before each read
       // dispatch; a revoked installation denies the read as a typed failure.
       if (installationCurrent && !installationCurrent()) {
-        throw new Error("installation_changed");
+        throw new InstallationChangedError();
       }
       return withRunScopedHostCallBudget(op, {
         charge: () => deps.store.chargeRunHostCall(assistantScope),

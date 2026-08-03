@@ -156,6 +156,22 @@ describe("custom field rest", () => {
     expect(body.customFieldValues).toEqual([{ customFieldId: "cf1", value: "updated" }]);
   });
 
+  it("setEntryCustomFieldValue omits `end` entirely for a RUNNING entry (timeInterval.end === null)", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({
+            id: "e1",
+            description: "work",
+            timeInterval: { start: "2026-06-06T10:00:00Z", end: null },
+            customFieldValues: [],
+          })
+        : jsonResponse({ id: "e1" }),
+    );
+    await rest(f as unknown as typeof fetch).setEntryCustomFieldValue("e1", "cf1", "new");
+    const body = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(body).not.toHaveProperty("end");
+  });
+
   it("prepares an entry replacement body and lossless source projection from the same GET", async () => {
     const source = {
       id: "e1",

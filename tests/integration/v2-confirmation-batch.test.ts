@@ -316,6 +316,82 @@ describe("v2 confirmation batches", () => {
     expect(store.getConfirmationBatch(prepared.batchId)?.status).toBe("succeeded");
   });
 
+  /**
+   * One confirmed item, one streamed callback.
+   *
+   * `confirmBatch` walks the members TWICE per request: a pre-authority
+   * validation pass (nonce/integrity) and the dispatch pass. Both emitted
+   * `onItem` for an ALREADY-TERMINAL member, so resuming a batch whose first
+   * item had settled produced the callback sequence `first, first, second` —
+   * the admin's stream showed a duplicate result card for a write that
+   * happened once.
+   *
+   * The dispatch pass is the single emission point. Validation still verifies
+   * that a terminal member can be replayed (and rejects `batch_incomplete`);
+   * it just no longer speaks.
+   */
+  it("streams each batch member exactly once when resuming a partly-settled batch", async () => {
+    const scope = {
+      sessionId: "",
+      runId: "run-batch-emit-once",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon" as const,
+    };
+    const { fake, store, session, prepared } = await prepareIndependentCreates(scope);
+    if (prepared.kind !== "prepared" || !prepared.batchId) return;
+    const service = confirmationService(store, fake);
+
+    const nonces = prepared.confirmationIds.map((confirmationId, index) => {
+      const pending = store.getPendingConfirmation(confirmationId)!;
+      const rotated = rotatePendingNonce({
+        record: pending,
+        sessionId: session.id,
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        sessionSecret: SESSION_SECRET,
+        nonce: `emit-${index}`,
+        now: NOW,
+      });
+      if (!rotated.ok) throw new Error("rotate failed");
+      store.updateConfirmationNonceHash(confirmationId, rotated.record.nonceHash);
+      return { confirmationId, nonce: rotated.nonce };
+    });
+
+    // Item 0 already settled in an earlier request that did not finish. Use the
+    // real pending -> executing -> succeeded transitions so the stored shape is
+    // exactly what a resumed request would find.
+    expect(store.markConfirmationExecuting(prepared.confirmationIds[0]!)).toBe(true);
+    const settled = store.settleConfirmation(
+      prepared.confirmationIds[0]!,
+      "succeeded",
+      "clockify_tags_create",
+      { kind: "receipt", receipt: { ok: true, action: "clockify_tags_create", entity: "tag" } },
+    );
+    store.updateConfirmationBatchItemStatus(prepared.batchId, 0, "succeeded", {
+      actionResultId: settled.id,
+      completedAt: NOW.toISOString(),
+    });
+
+    const emitted: string[] = [];
+    const outcome = await service.confirmBatch({
+      claims: { sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1" },
+      batchId: prepared.batchId,
+      items: nonces,
+      onItem: (item) => emitted.push(item.confirmationId),
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // Exactly one callback per member, in order — never `first, first, second`.
+    expect(emitted).toEqual([prepared.confirmationIds[0], prepared.confirmationIds[1]]);
+    expect(outcome.items).toHaveLength(2);
+    // The already-settled write is NOT dispatched a second time.
+    expect(fake.counts.createTag ?? 0).toBe(0);
+    expect(fake.counts.createClientBaseAtomic).toBe(1);
+  });
+
   it("rejects reordered batch members and replays a settled batch without redispatch", async () => {
     const scope = {
       sessionId: "",
@@ -371,6 +447,47 @@ describe("v2 confirmation batches", () => {
     if (!replay.ok) return;
     expect(replay.items.every((item) => item.replayed)).toBe(true);
     expect(mutationCallTotal(fake.counts)).toBe(mutationsAfterFirst);
+  });
+
+  /**
+   * Crash recovery for a batch item that DID start writes a canonical action
+   * result with `recovery` as a bare STRING, while `ErrorReceipt.recovery` is
+   * an object and the UI protocol decoder requires `recovery.retryable` to be a
+   * boolean (`src/ui/protocol.ts`). So the one result an admin most needs to
+   * see after a restart — "the server restarted before this reached Clockify"
+   * — could not be decoded and rendered at all.
+   */
+  it("writes a DECODABLE recovery receipt when a started item is recovered", async () => {
+    const scope = {
+      sessionId: "",
+      runId: "run-batch-recover-shape",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon" as const,
+    };
+    const { store, prepared } = await prepareIndependentCreates(scope);
+    if (prepared.kind !== "prepared" || !prepared.batchId) return;
+
+    expect(store.markConfirmationBatchExecuting(prepared.batchId)).toBe(true);
+    // The first item began, so recovery must CANCEL the remainder and record a
+    // truthful result rather than returning the batch to pending.
+    store.updateConfirmationBatchItemStatus(prepared.batchId, 0, "executing", {
+      startedAt: NOW.toISOString(),
+    });
+    store.recoverConfirmationBatch(prepared.batchId, NOW.toISOString());
+
+    const item = store.listConfirmationBatchItems(prepared.batchId)
+      .find((row) => row.itemIndex === 0);
+    expect(item?.actionResultId).toBeTruthy();
+    const stored = store.getActionResult(item!.actionResultId!) as {
+      receipt: { code: string; recovery: unknown };
+    };
+    expect(stored.receipt.code).toBe("operation_cancelled_before_dispatch");
+    // The contract the UI decoder enforces.
+    expect(typeof stored.receipt.recovery).toBe("object");
+    expect(stored.receipt.recovery).toMatchObject({ retryable: false });
+    expect(typeof (stored.receipt.recovery as { hint?: unknown }).hint).toBe("string");
   });
 
   it("recovers a never-dispatched executing batch back to pending before confirm", async () => {
@@ -470,6 +587,84 @@ describe("v2 confirmation batches", () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.status).toBe("succeeded");
     expect(res.body.items).toHaveLength(2);
+  });
+
+  /**
+   * T13: the streamed `reply` event must carry human-readable prose in `text`
+   * — not a raw JSON object dump — while the same per-item outcomes remain
+   * available in a structured field.
+   */
+  it("streams a human-readable reply.text for a confirmed batch, with structured data preserved", async () => {
+    const scope = {
+      sessionId: "",
+      runId: "run-batch-route-stream",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon" as const,
+    };
+    const { fake, store, session, prepared, clock } = await prepareIndependentCreates(scope, {
+      now: () => new Date(),
+    });
+    if (prepared.kind !== "prepared" || !prepared.batchId) return;
+
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: "ai-assistant",
+      sessionSecret: SESSION_SECRET,
+      assistantEngine: "v2",
+    });
+    const app = createApp({
+      config,
+      store,
+      parser: createSignatureParser("ai-assistant", keys.pem),
+      modelClient: selectModelClient(config),
+      clockifyForWorkspace: () => fake.client,
+    });
+    const cookie = cookieForSession(session, scope);
+    const items = prepared.confirmationIds.map((confirmationId, index) => {
+      const pending = store.getPendingConfirmation(confirmationId)!;
+      const rotated = rotatePendingNonce({
+        record: pending,
+        sessionId: session.id,
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        sessionSecret: SESSION_SECRET,
+        nonce: `route-stream-${index}`,
+        now: clock(),
+      });
+      if (!rotated.ok) throw new Error("rotate failed");
+      store.updateConfirmationNonceHash(confirmationId, rotated.record.nonceHash);
+      return { confirmationId, nonce: rotated.nonce };
+    });
+
+    const res = await request(app)
+      .post(`/api/confirmation-batches/${prepared.batchId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ items });
+
+    expect(res.status).toBe(200);
+    const lines = res.text.split("\n").filter((line) => line.length > 0).map((line) => JSON.parse(line) as {
+      type: string;
+      text?: string;
+      batch?: { batchId: string; status: string; items: Array<{ confirmationId: string; status: string; replayed: boolean }> };
+    });
+    const reply = lines.find((line) => line.type === "reply");
+    expect(reply).toBeDefined();
+    if (!reply) return;
+    const text = reply.text ?? "";
+    // Human-readable: not a JSON blob living in text.
+    expect(text.startsWith("{")).toBe(false);
+    expect(() => JSON.parse(text)).toThrow();
+    expect(text.length).toBeGreaterThan(0);
+    // Structured data still present, moved rather than deleted.
+    const batch = reply.batch;
+    expect(batch).toBeDefined();
+    if (!batch) return;
+    expect(batch.batchId).toBe(prepared.batchId);
+    expect(batch.status).toBe("succeeded");
+    expect(batch.items).toHaveLength(2);
   });
 
   /**

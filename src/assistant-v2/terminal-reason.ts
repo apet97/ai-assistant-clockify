@@ -129,6 +129,26 @@ export const TERMINAL_REASONS: readonly TerminalReason[] = [
 ] as const;
 
 /**
+ * T12: typed replacement for the bare `Error("installation_changed")` that
+ * `requestGovernorFor` (`src/routes/v2-chat-pipeline.ts`) throws when a read's
+ * per-dispatch generation recheck (F07) finds the installation no longer
+ * current. Consumers that can import this module should `instanceof`-check
+ * it rather than compare `error.message` to a magic string.
+ *
+ * `code` is kept equal to the `TerminalReason` literal so sites that only
+ * look at a DECLARED `code` property (the "declared code beats prose
+ * message" pattern already used for `HostCallBudgetExceededError` etc. in
+ * `read-execution.ts`) keep working without a code change on their part.
+ */
+export class InstallationChangedError extends Error {
+  readonly code: Extract<TerminalReason, "installation_changed"> = "installation_changed";
+  constructor() {
+    super("installation_changed");
+    this.name = "InstallationChangedError";
+  }
+}
+
+/**
  * Parse at the boundary. An unrecognized reason — including a raw error message that
  * reached this field before the runner was fixed, and any future `invalid_*` code the
  * preparation service invents — becomes `internal_error` rather than being shown.

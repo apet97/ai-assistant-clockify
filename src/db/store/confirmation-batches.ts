@@ -197,7 +197,6 @@ export function buildConfirmationBatchStore(ctx: StoreContext): {
   ): boolean;
   cancelUndispatchedBatchItems(batchId: string, fromIndex: number, timestamp: string): number;
   recoverConfirmationBatch(batchId: string, nowIsoArg: string): void;
-  expireConfirmationBatches(nowIso: string): number;
 } {
   const { db, nowIso } = ctx;
   return {
@@ -377,7 +376,15 @@ export function buildConfirmationBatchStore(ctx: StoreContext): {
               action: "unknown_action",
               code: "operation_cancelled_before_dispatch",
               message: "The server restarted before this queued action reached Clockify. No change was made.",
-              recovery: "Create a fresh request when the service is available.",
+              // `ErrorReceipt.recovery` is a RecoveryHint object, and the UI
+              // protocol decoder requires `recovery.retryable` to be a boolean
+              // (`src/ui/protocol.ts`). A bare string here meant the one result
+              // an admin most needs after a restart could not be decoded or
+              // rendered at all.
+              recovery: {
+                hint: "Create a fresh request when the service is available.",
+                retryable: false,
+              },
             },
           };
           const summary = buildActionResultSummary(actionResultId, result);
@@ -416,13 +423,6 @@ export function buildConfirmationBatchStore(ctx: StoreContext): {
           ).run(actionResultId, nowIsoArg, item.operation_id);
         }
       })();
-    },
-    expireConfirmationBatches(nowIsoArg) {
-      return db.prepare(
-        `UPDATE confirmation_batches
-            SET status = 'expired', completed_at = COALESCE(completed_at, ?)
-          WHERE status IN ('pending', 'executing') AND expires_at <= ?`,
-      ).run(nowIsoArg, nowIsoArg).changes;
     },
   };
 }

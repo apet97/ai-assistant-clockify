@@ -29,23 +29,20 @@ export function createRunEventViewService(
         installationGeneration: input.scope.installationGeneration,
         authClass: input.scope.authClass,
       };
-      try {
-        const page = store.listRunEvents({ scope, after: input.after, limit: input.limit });
-        const events = sessionSecret
-          ? hydrateRunEventAttachments({
-              store,
-              scope,
-              sessionSecret,
-              now: now(),
-            }, page.events)
-          : page.events;
-        return { ...page, events };
-      } catch (error) {
-        if (error instanceof Error && error.message === "run_not_found") {
-          throw error;
-        }
-        throw error;
-      }
+      // No try/catch: the only handler here caught every error and rethrew it
+      // unchanged (including an explicit `run_not_found` branch that also just
+      // rethrew), so it changed nothing and only implied a policy that did not
+      // exist. Errors propagate to the route, exactly as they did before.
+      const page = store.listRunEvents({ scope, after: input.after, limit: input.limit });
+      const events = sessionSecret
+        ? hydrateRunEventAttachments({
+            store,
+            scope,
+            sessionSecret,
+            now: now(),
+          }, page.events)
+        : page.events;
+      return { ...page, events };
     },
   };
 }

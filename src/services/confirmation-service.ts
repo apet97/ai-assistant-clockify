@@ -696,11 +696,15 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
         return rejectBatch(409, "batch_integrity_failed", "A batch member is no longer available.");
       }
       if (item.status !== "pending") {
-        const replay = terminalItemOutcome(item, record);
-        if (!replay) {
+        // VERIFY that a terminal member can be replayed — but do NOT emit. This
+        // is the pre-authority validation pass; the dispatch loop below walks
+        // the same members and is the single emission point. Emitting here too
+        // produced `first, first, second` when resuming a batch whose first
+        // item had already settled, so the admin's stream showed a duplicate
+        // result card for a write that happened exactly once.
+        if (!terminalItemOutcome(item, record)) {
           return rejectBatch(409, "batch_incomplete", "The stored batch is not fully settled for replay.");
         }
-        onItem?.(replay);
         continue;
       }
       if (!body.nonce) {

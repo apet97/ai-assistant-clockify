@@ -1,6 +1,7 @@
 import type { ModelMessage, ToolDefinition } from "../assistant/model-client.js";
 import { DISCOVERY_META_TOOL_NAME } from "../harness/api-operation.js";
 import {
+  TokenBudgetExhaustedError,
   chargeFailedModelAttempt,
   chargeSuccessfulModelAttempt,
   preflightModelRequest,
@@ -170,7 +171,7 @@ export function createRunService(deps: RunServiceDeps) {
       serializeToolsForPreflight(tools),
     );
     const preflight = preflightModelRequest(state.budget, requestBytes);
-    if (!preflight.ok) throw new Error("token_budget_exhausted");
+    if (!preflight.ok) throw new TokenBudgetExhaustedError();
     let providerAttempts: 1 | 2 = 1;
     // F10: a FAILED provider attempt charges its conservative reservation
     // exactly once, durably — attempt 2's start records attempt 1's failure
