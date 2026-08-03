@@ -29,7 +29,7 @@ import {
 } from "../harness/prepared-write-presentation.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import { errorReceipt } from "../harness/receipts.js";
-import { classifyLoggableError } from "../log-error-class.js";
+import { classifyLoggableError, sentinelDetail } from "../log-error-class.js";
 import { buildV2ActionContext } from "../assistant-v2/action-context.js";
 import { createClarificationRow } from "../assistant-v2/read-execution.js";
 
@@ -474,7 +474,16 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
           || raw.startsWith("invalid_")
           || raw === "presentation_limit_exceeded";
         if (!recognized) {
-          console.error(`[v2-prepare] event=write_port_not_ready ${classifyLoggableError(error)}`);
+          // The admin-facing code is bounded to `write_port_not_ready`, so the
+          // operator log is the ONLY place the cause can appear. Naming an
+          // internal snake_case sentinel here is what makes that code
+          // actionable — production once logged the entire line as
+          // `event=write_port_not_ready name=Error`.
+          const sentinel = sentinelDetail(raw);
+          console.error(
+            `[v2-prepare] event=write_port_not_ready ${classifyLoggableError(error)}`
+            + (sentinel ? ` reason=${sentinel}` : ""),
+          );
         }
         const code = recognized ? raw : "write_port_not_ready";
         const ref = deps.store.recordActionResult({

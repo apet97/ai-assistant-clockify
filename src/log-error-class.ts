@@ -108,3 +108,28 @@ function classifyAtDepth(value: unknown, remainingCauseDepth: number): string {
   }
   return parts.join(" ");
 }
+
+/**
+ * An INTERNAL sentinel that is safe to name in an operator log.
+ *
+ * `classifyLoggableError` drops `message` by design, because it can carry admin
+ * text, workspace ids and JWT fragments. That is right for arbitrary throws and
+ * wrong for our own control-flow sentinels: a production `write_port_not_ready`
+ * logged the whole line `[v2-prepare] event=write_port_not_ready name=Error`,
+ * which is unactionable — the bounded admin code cost a debugging cycle because
+ * the operator side was bounded too.
+ *
+ * The accepted shape is deliberately narrower than `BOUNDED_DETAIL`: lowercase
+ * letters with at least one underscore, nothing else. That cannot express a
+ * 24-hex Clockify id (`ad06c083d3e1fc6194dd2fa7` would pass a naive
+ * `[a-z0-9_]+`), a JWT, a URL, or a sentence — while every sentinel this
+ * codebase throws (`assistant_run_not_found`, `write_port_not_ready`,
+ * `clarification_not_pending`) passes.
+ */
+const INTERNAL_SENTINEL = /^[a-z]+(?:_[a-z]+)+$/u;
+const SENTINEL_MAX_LENGTH = 64;
+
+export function sentinelDetail(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > SENTINEL_MAX_LENGTH) return undefined;
+  return INTERNAL_SENTINEL.test(value) ? value : undefined;
+}

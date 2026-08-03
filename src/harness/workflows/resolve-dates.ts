@@ -118,9 +118,44 @@ export function resolveRelativeDay(
       return addDays(today, weekday[1] === "next" ? ahead || 7 : ahead);
     }
   }
+  const boundary = parseCalendarBoundary(zonedNow.toPlainDate(), raw);
+  if (boundary !== undefined) return boundary;
   const monthDay = parseMonthNameDay(new Date(Date.UTC(zonedNow.year, 0, 1)), raw);
   if (monthDay !== undefined) return monthDay;
   return undefined;
+}
+
+/**
+ * "first day of this month" and its relatives.
+ *
+ * A live turn dead-ended on exactly that phrase: the admin asked to update
+ * "all entries from this month", the model is forbidden from computing calendar
+ * dates itself (so it passed the words through, correctly), and this function
+ * had no branch for them — producing "I couldn't make sense of the date".
+ * These are unambiguous and server-computable, which is what this resolver is
+ * for.
+ *
+ * WEEK is deliberately absent. The first day of a week depends on the
+ * workspace's `weekStartsOn`, which this function never receives; guessing
+ * Monday would hand back a confidently wrong date, and an honest clarify beats
+ * that. `resolvePeriod` owns week-shaped ranges, where the caller does have
+ * the calendar context.
+ */
+function parseCalendarBoundary(today: Temporal.PlainDate, raw: string): string | undefined {
+  const match = raw.match(
+    /^(?:the\s+)?(first|1st|start|beginning|last|end)\s+(?:day\s+)?of\s+(?:the\s+|this\s+|current\s+|last\s+|previous\s+|next\s+)?(month|year)$/,
+  );
+  if (!match) return undefined;
+  const wantsEnd = match[1] === "last" || match[1] === "end";
+  const unit = match[2];
+  const shift = /\b(last|previous)\s+(?:month|year)$/.test(raw) ? -1 : /\bnext\s+(?:month|year)$/.test(raw) ? 1 : 0;
+
+  if (unit === "month") {
+    const base = today.with({ day: 1 }).add({ months: shift });
+    return (wantsEnd ? base.with({ day: base.daysInMonth }) : base).toString();
+  }
+  const base = today.with({ month: 1, day: 1 }).add({ years: shift });
+  return (wantsEnd ? base.with({ month: 12, day: 31 }) : base).toString();
 }
 
 export const REPORT_PERIODS = [

@@ -59,3 +59,42 @@ describe("denial observations carry meaning, not just a code", () => {
     expect(line).toBe("clockify_entries_list returned: 3 entries");
   });
 });
+
+/**
+ * The operator log has to name OUR OWN sentinel, or a bounded code costs a
+ * debugging cycle.
+ *
+ * Production 2026-08-03, c90b63b: a `clockify_entries_update` preview failed
+ * with `write_port_not_ready` — correctly bounded, since the raw message used
+ * to be rendered onto the admin's card. But the whole operator log line read:
+ *
+ *   [v2-prepare] event=write_port_not_ready name=Error
+ *
+ * `classifyLoggableError` drops `message` by design (it can carry admin text,
+ * workspace ids, JWT fragments), so the cause was unknowable from production.
+ *
+ * `logSafeDetail` is the sanctioned escape hatch: a PRODUCER-declared bounded
+ * detail. An internal sentinel like `assistant_run_not_found` is safe to name;
+ * arbitrary prose is not. The discriminator is deliberately narrow — all
+ * lowercase letters with at least one underscore — because that shape cannot
+ * express a 24-hex Clockify id, a JWT, or a sentence of admin text.
+ */
+describe("internal sentinels reach the operator log", () => {
+  it("accepts a snake_case sentinel as a log-safe detail", async () => {
+    const { sentinelDetail } = await import("../../src/log-error-class.js");
+    expect(sentinelDetail("assistant_run_not_found")).toBe("assistant_run_not_found");
+    expect(sentinelDetail("write_port_not_ready")).toBe("write_port_not_ready");
+  });
+
+  it("refuses anything that could carry data", async () => {
+    const { sentinelDetail } = await import("../../src/log-error-class.js");
+    // A 24-hex workspace id starting with a letter would pass a naive
+    // [a-z0-9_]+ test. It must not pass this one.
+    expect(sentinelDetail("ad06c083d3e1fc6194dd2fa7")).toBeUndefined();
+    expect(sentinelDetail("Clockify PUT /workspaces/64ad -> 500")).toBeUndefined();
+    expect(sentinelDetail("eyJhbGciOiJIUzI1NiJ9.x.y")).toBeUndefined();
+    expect(sentinelDetail("nounderscore")).toBeUndefined();
+    expect(sentinelDetail("entry_9f2")).toBeUndefined();
+    expect(sentinelDetail("")).toBeUndefined();
+  });
+});

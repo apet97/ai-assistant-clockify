@@ -147,3 +147,67 @@ describe("resolveDateRange", () => {
     expect(instants).toEqual({ ok: false, message: expect.stringMatching(/start.*after.*end/i) });
   });
 });
+
+/**
+ * Calendar-boundary phrases.
+ *
+ * Observed in production 2026-08-03: the admin asked to update "all entries
+ * from this month", and the model — correctly forbidden from computing dates
+ * itself — passed the phrase "first day of this month" as the start date. The
+ * resolver had no branch for it and returned undefined, which dead-ends the
+ * turn in "I couldn't make sense of the date ... give me a calendar date
+ * (YYYY-MM-DD) or something like today, yesterday, or last monday."
+ *
+ * These are unambiguous server-computable calendar dates, which is exactly what
+ * this resolver exists for. WEEK boundaries are deliberately NOT added: the
+ * first day of a week depends on the workspace's `weekStartsOn`, which this
+ * function does not receive, so guessing would produce a confidently wrong date
+ * where a clarify is honest.
+ */
+describe("resolveRelativeDay calendar boundaries", () => {
+  it("resolves the phrase that dead-ended a live turn", () => {
+    expect(resolveRelativeDay(NOW, { date: "first day of this month" })).toBe("2026-06-01");
+  });
+
+  it("accepts the natural synonyms for a month boundary", () => {
+    for (const phrase of [
+      "first day of this month",
+      "start of this month",
+      "beginning of this month",
+      "start of the month",
+      "first day of the month",
+    ]) {
+      expect(resolveRelativeDay(NOW, { date: phrase }), phrase).toBe("2026-06-01");
+    }
+    for (const phrase of ["last day of this month", "end of this month", "end of the month"]) {
+      expect(resolveRelativeDay(NOW, { date: phrase }), phrase).toBe("2026-06-30");
+    }
+  });
+
+  it("resolves last and next month, including their real lengths", () => {
+    expect(resolveRelativeDay(NOW, { date: "first day of last month" })).toBe("2026-05-01");
+    expect(resolveRelativeDay(NOW, { date: "end of last month" })).toBe("2026-05-31");
+    expect(resolveRelativeDay(NOW, { date: "start of next month" })).toBe("2026-07-01");
+    // February 2026 has 28 days — computed, never assumed 30/31.
+    expect(resolveRelativeDay(new Date("2026-02-14T12:00:00.000Z"), { date: "end of this month" })).toBe("2026-02-28");
+  });
+
+  it("resolves year boundaries", () => {
+    expect(resolveRelativeDay(NOW, { date: "start of this year" })).toBe("2026-01-01");
+    expect(resolveRelativeDay(NOW, { date: "first day of the year" })).toBe("2026-01-01");
+    expect(resolveRelativeDay(NOW, { date: "end of this year" })).toBe("2026-12-31");
+    expect(resolveRelativeDay(NOW, { date: "start of last year" })).toBe("2025-01-01");
+    expect(resolveRelativeDay(NOW, { date: "end of next year" })).toBe("2027-12-31");
+  });
+
+  it("still clarifies for a week boundary rather than guessing weekStartsOn", () => {
+    expect(resolveRelativeDay(NOW, { date: "start of this week" })).toBeUndefined();
+    expect(resolveRelativeDay(NOW, { date: "end of this week" })).toBeUndefined();
+  });
+
+  it("still clarifies for genuinely ambiguous or unknown phrases", () => {
+    expect(resolveRelativeDay(NOW, { date: "first day of the quarter" })).toBeUndefined();
+    expect(resolveRelativeDay(NOW, { date: "sometime last spring" })).toBeUndefined();
+    expect(resolveRelativeDay(NOW, { date: "" })).toBe("2026-06-10");
+  });
+});
