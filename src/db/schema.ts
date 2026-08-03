@@ -1988,6 +1988,24 @@ function migrateToV4(db: Database.Database): void {
     );
   }
 
+  // v3 -> v4 idempotency ledger: legacy rows are DROPPED, not migrated.
+  //
+  // The v4 primary key is (key, workspace_id, admin_user_id). A v3 row carries
+  // no tenant columns at all, so there is no value to migrate them WITH — any
+  // workspace_id/admin_user_id written here would be invented. Guessing an
+  // owner for a dedupe ledger is the one mistake with a real blast radius: a
+  // wrong tenant either suppresses a DIFFERENT admin's legitimate write as a
+  // duplicate, or lets a genuine duplicate through, and both are silent.
+  //
+  // The consequence is bounded and self-healing: the ledger only suppresses
+  // repeat commits inside a 10-minute window (IDEMPOTENCY_WINDOW_MS), so an
+  // emptied ledger costs at most the loss of dedupe for in-flight work at
+  // upgrade time — it can never corrupt or lose a committed result, which lives
+  // in `action_results`.
+  //
+  // Restoring these rows requires a separately authorized data-recovery design
+  // that establishes ownership from evidence (audit rows, operation journals),
+  // NOT a widened migration. See docs/SCHEMA_MIGRATION_DATA_BOUNDARIES.md.
   db.prepare("ALTER TABLE idempotency_keys RENAME TO idempotency_keys_v3").run();
   db.exec(`
     CREATE TABLE idempotency_keys (
@@ -2016,6 +2034,13 @@ function migrateToV4(db: Database.Database): void {
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL
     );
+    -- Artifacts over 1 MiB are EXCLUDED, not truncated. The v4 table declares
+    -- CHECK (length(bytes) <= 1000000), so copying an oversized row would abort
+    -- the whole migration and wedge the upgrade; copying a truncated prefix
+    -- would produce a file whose checksum no longer matches its bytes — a
+    -- corrupt artifact presented as a valid one. Artifacts are short-lived
+    -- derived exports with an expires_at, never a system of record, so
+    -- dropping an oversized one loses a regenerable download and nothing else.
     INSERT INTO artifacts
       SELECT * FROM artifacts_v3 WHERE length(bytes) <= 1000000;
   `);

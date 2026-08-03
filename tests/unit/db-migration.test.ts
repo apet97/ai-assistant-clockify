@@ -63,6 +63,21 @@ describe("idempotency_keys migration", () => {
       "claimed_at",
     ]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM idempotency_keys").get()).toEqual({ n: 0 });
+    // The drop is DELIBERATE and bounded (see the comment at the rebuild in
+    // schema.ts, and docs/SCHEMA_MIGRATION_DATA_BOUNDARIES.md): a v3 row has no
+    // tenant columns, so migrating it would mean INVENTING an owner for a
+    // dedupe ledger — which either suppresses another admin's legitimate write
+    // or admits a real duplicate, both silently.
+    //
+    // Pin the boundary explicitly rather than only the count, so a future
+    // "helpful" migration that back-fills an owner fails here instead of in
+    // production: the legacy table is gone, and nothing carries a placeholder
+    // tenant.
+    const tables = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'idempotency_keys%'",
+    ).all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name).sort()).toEqual(["idempotency_keys"]);
+    expect(db.prepare("PRAGMA user_version").get()).toMatchObject({ user_version: expect.any(Number) });
     db.close();
   });
 
@@ -646,6 +661,15 @@ describe("schema v4 canonical-result ownership", () => {
          ) VALUES ('too-big', 'w', 'a', 's', 'x', 'x', ?, 'x', '2026-01-01', '2026-01-02')`,
       ).run(Buffer.alloc(1_000_001)),
     ).toThrow(/CHECK constraint failed/);
+
+    // The v3 -> v4 copy EXCLUDES oversized rows rather than truncating them: a
+    // truncated artifact would no longer match its stored checksum, i.e. a
+    // corrupt file presented as a valid one. Pin that an under-limit row
+    // survives the migration while an over-limit one is simply absent, so the
+    // exclusion can never be "fixed" into a truncation.
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM artifacts WHERE id = 'too-big'").get(),
+    ).toEqual({ n: 0 });
     db.close();
   });
 });
